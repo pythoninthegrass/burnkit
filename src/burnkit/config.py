@@ -103,7 +103,7 @@ class BurnConfig:
     health_check: Callable[[str], bool] | None = None
 
     # Loop limits
-    task_timeout_s: int = 3600
+    task_timeout_s: int = 21600
     max_attempts: int = 2
     max_turns: int = 150
     # An agent run dying faster than this suggests provider trouble rather than

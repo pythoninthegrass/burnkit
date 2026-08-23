@@ -83,7 +83,7 @@ Required, in positional order:
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `task_timeout_s` | `3600` | Wall-clock ceiling for one agent session |
+| `task_timeout_s` | `21600` | Wall-clock ceiling for one agent session |
 | `max_attempts` | `2` | Attempts per task before it is left for triage |
 | `max_turns` | `150` | Passed to the agent |
 | `fast_fail_s` | `90` | A run dying faster than this is counted separately — it suggests provider trouble, not task trouble |
@@ -321,7 +321,7 @@ whatever that shim chooses. The established set:
 `BURN_SECRETS_ENV`, `BURN_DSH_ENV`, `BURN_MODEL`, `BURN_PROVIDER`,
 `BURN_ORCH_MODEL`, `BURN_ORCH_PROVIDER`, `BURN_BUILDER_MODEL`,
 `BURN_BUILDER_PROVIDER`, `BURN_FALLBACK_MODEL`, `BURN_FALLBACK_PROVIDER`,
-`BURN_LEMONADE_URL`, `BURN_TASK_TIMEOUT_S`, `BURN_MAX_ATTEMPTS`,
+`BURN_LEMONADE_URL`, `BURN_TASK_TIMEOUT`, `BURN_MAX_ATTEMPTS`,
 `BURN_MAX_TURNS`, `BURN_BACKEND`.
 
 Note the collision: a shim reads `BURN_MODEL` to *configure* the planner, and
