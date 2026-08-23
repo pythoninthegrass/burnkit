@@ -8,6 +8,7 @@ what this driver itself launched.
 
 import pytest
 import signal
+import subprocess
 from burnkit import proc
 from burnkit.config import BurnConfig
 from burnkit.state import BurnLayout
@@ -143,3 +144,33 @@ def test_launch_env_falls_back_to_the_declared_default(tmp_path: Path) -> None:
 def test_pidfile_path_is_under_the_run_layout(tmp_path: Path) -> None:
     layout = BurnLayout(tmp_path / "burn")
     assert proc.pidfile(layout, "WK-000.01") == tmp_path / "burn" / "pids" / "WK-000.01"
+
+
+def _pane_env(monkeypatch, **kwargs) -> dict[str, str]:
+    """Capture the --env pairs `launch` hands the monitored pane."""
+    seen: dict[str, str] = {}
+
+    def fake_run(cmd, **_):
+        for flag, pair in zip(cmd, cmd[1:], strict=False):
+            if flag == "--env":
+                key, _, value = pair.partition("=")
+                seen[key] = value
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(proc, "herdr_available", lambda: True)
+    monkeypatch.setattr(proc.subprocess, "run", fake_run)
+    proc.launch("WK-000.01", Path("/wt"), "true", {"BURN_LOG": "/l"}, {"PATH": "/bin", "MODEL_API_KEY": "k"}, **kwargs)
+    return seen
+
+
+def test_launch_forwards_the_declared_secrets_to_the_monitored_pane(monkeypatch) -> None:
+    """A pane does not inherit the driver's environment, so a secret resolved
+    into `env` reaches the agent only if it is passed through explicitly."""
+    assert _pane_env(monkeypatch, forward=("MODEL_API_KEY",))["MODEL_API_KEY"] == "k"
+
+
+def test_launch_forwards_nothing_it_was_not_asked_to(monkeypatch) -> None:
+    seen = _pane_env(monkeypatch)
+    assert seen["BURN_LOG"] == "/l"
+    assert seen["PATH"] == "/bin"
+    assert "MODEL_API_KEY" not in seen

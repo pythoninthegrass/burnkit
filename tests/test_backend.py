@@ -108,9 +108,23 @@ def test_hermes_task_env_carries_the_model_selection(config: BurnConfig) -> None
 def test_hermes_task_env_includes_the_consumers_launch_env(config: BurnConfig) -> None:
     """A consumer hands out-of-tree roots to its local tools this way, so the
     worktree a remote planner reads stays free of them."""
-    cfg = dataclasses.replace(config, launch_env=lambda task: {"WIDGET_DATA_ROOT": f"/out/{task}"})
+    cfg = dataclasses.replace(config, launch_env=lambda task, backend: {"WIDGET_DATA_ROOT": f"/out/{task}"})
     env = hermes_backend(cfg).task_env("WK-000.00", Path("/p"), Path("/l"))
     assert env["WIDGET_DATA_ROOT"] == "/out/WK-000.00"
+
+
+def test_launch_env_is_told_which_backend_it_is_building_for(config: BurnConfig) -> None:
+    """Out-of-tree roots exist so a *remote*-planner backend never has the
+    content in its worktree. A fully-local backend reads that content directly,
+    so a consumer scopes the roots by backend instead of handing every backend
+    environment it does not use.
+    """
+    cfg = dataclasses.replace(
+        config,
+        launch_env=lambda task, backend: {"WIDGET_DATA_ROOT": "/out"} if backend == "hermes" else {},
+    )
+    assert "WIDGET_DATA_ROOT" in hermes_backend(cfg).task_env("WK-000.00", Path("/p"), Path("/l"))
+    assert "WIDGET_DATA_ROOT" not in dsh_backend(cfg).task_env("WK-000.00", Path("/p"), Path("/l"))
 
 
 def test_symlink_prepare_links_the_requested_trees(tmp_path: Path) -> None:

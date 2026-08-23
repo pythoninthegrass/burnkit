@@ -128,7 +128,14 @@ def cmd_run(
             return EXIT_PREFLIGHT_HOOK
 
         layout.write_heartbeat(task, attempt, "start", f"backend={backend.name} branch={branch}")
-        launch(task, wt, backend.shell_cmd, backend.task_env(task, prompt_file, log), env)
+        launch(
+            task,
+            wt,
+            backend.shell_cmd,
+            backend.task_env(task, prompt_file, log),
+            env,
+            forward=tuple(config.launch_secrets),
+        )
         finished, elapsed = wait_for_exit(log, kill_file=layout.kill_file, timeout_s=config.task_timeout_s, poll_s=config.poll_s)
         if not finished:
             kill_task_processes(layout, task)

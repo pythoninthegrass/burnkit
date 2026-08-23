@@ -86,7 +86,7 @@ def hermes_backend(
             "BURN_MODEL": config.model,
             "BURN_PROVIDER": config.provider,
             "BURN_MAX_TURNS": str(config.max_turns),
-            **config.launch_env(task),
+            **config.launch_env(task, "hermes"),
         }
 
     default_line = (
@@ -117,7 +117,7 @@ def dsh_backend(
             "BURN_PIDFILE": str(config.layout.pids / task),
             "BURN_DSH_ENV": str(config.dsh_env_file),
             "DSH_PERMISSION_MODE": "danger-full-access",
-            **config.launch_env(task),
+            **config.launch_env(task, "dsh"),
         }
 
     default_line = (

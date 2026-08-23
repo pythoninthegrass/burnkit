@@ -6,7 +6,15 @@ queue, the worktree lifecycle, the launch backends, the finish-marker protocol,
 and the proof-of-done gates.
 """
 
-from burnkit.backend import Backend, dsh_backend, hermes_backend, preflight_lemonade, resolve_backend, symlink_prepare
+from burnkit.backend import (
+    Backend,
+    dsh_backend,
+    hermes_backend,
+    preflight_hooks_for,
+    preflight_lemonade,
+    resolve_backend,
+    symlink_prepare,
+)
 from burnkit.cli import main, run_from_cli
 from burnkit.config import BurnConfig, MachineGate, PreflightHook
 
@@ -42,6 +50,7 @@ __all__ = [
     "iter_events",
     "limited",
     "main",
+    "preflight_hooks_for",
     "preflight_lemonade",
     "resolve_backend",
     "run_from_cli",

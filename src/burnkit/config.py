@@ -104,9 +104,11 @@ class BurnConfig:
     context7_line: str = ""
     extra_bail_conditions: tuple[str, ...] = ()
 
-    # Extra environment handed to a launched agent, keyed by task id. A
-    # consumer uses this to point local tools at out-of-tree content.
-    launch_env: Callable[[str], dict[str, str]] = lambda task: {}
+    # Extra environment handed to a launched agent, called with (task id,
+    # backend name). A consumer uses this to point local tools at out-of-tree
+    # content, and takes the backend name because that content is usually only
+    # kept out-of-tree for the backends whose planning step leaves the machine.
+    launch_env: Callable[[str, str], dict[str, str]] = lambda task, backend: {}
 
     @property
     def layout(self) -> BurnLayout:

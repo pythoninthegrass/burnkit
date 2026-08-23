@@ -70,12 +70,19 @@ def pidfile(layout: BurnLayout, task: str) -> Path:
     return layout.pids / task
 
 
-def launch(task: str, wt: Path, shell_cmd: str, task_env: dict, env: dict) -> None:
+def launch(task: str, wt: Path, shell_cmd: str, task_env: dict, env: dict, forward: tuple[str, ...] = ()) -> None:
     """Prefer a monitored agent pane; fall back to a direct child in its own
-    process group so termination can still reach the whole tree."""
+    process group so termination can still reach the whole tree.
+
+    `forward` names keys of `env` to pass through to the pane: a pane does not
+    inherit this process's environment, so a resolved secret reaches the agent
+    only by being listed here. The fallback child inherits `env` wholesale and
+    needs no such list.
+    """
     if herdr_available():
         cmd = ["herdr", "agent", "start", task, "--cwd", str(wt), "--no-focus"]
-        for k, v in {**task_env, "PATH": env["PATH"]}.items():
+        forwarded = {k: env.get(k, "") for k in forward}
+        for k, v in {**task_env, **forwarded, "PATH": env["PATH"]}.items():
             cmd += ["--env", f"{k}={v}"]
         cmd += ["--", "bash", "-c", shell_cmd]
         if subprocess.run(cmd, check=False, timeout=60).returncode == 0:
