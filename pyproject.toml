@@ -1,0 +1,60 @@
+[project]
+name = "burnkit"
+version = "0.1.0"
+description = "Shared driver for overnight headless-agent burn loops over a Backlog.md task queue"
+authors = [
+    { name = "pythoninthegrass", email = "4097471+pythoninthegrass@users.noreply.github.com" }
+]
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["agents", "backlog", "automation", "git-worktree", "headless"]
+classifiers = [
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: POSIX :: Linux",
+]
+
+requires-python = ">=3.13,<3.14"
+
+dependencies = [
+    "python-decouple>=3.8",
+    "pyyaml>=6.0.3",
+    "zstandard>=0.25.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "jq>=1.10.0",
+    "pytest>=9.1.1",
+    "ruff>=0.16.4",
+]
+# The burn-dsh-log CLI compiles jq programs in six of its seven subcommands, so
+# the extra gates the whole CLI. The log-reading core in dshlog.py is
+# deliberately jq-free (stdlib + zstandard) and importable without this.
+forensics = [
+    "jq>=1.10.0",
+]
+
+[project.scripts]
+burn-dsh-log = "burnkit.forensics:main"
+
+[project.urls]
+Homepage = "https://github.com/pythoninthegrass/burnkit"
+Issues = "https://github.com/pythoninthegrass/burnkit/issues"
+
+[build-system]
+requires = ["uv_build>=0.11.26,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_functions = "test_*"
+python_classes = "Test*"
+markers = [
+    "unit: marks tests as unit tests",
+    "integration: marks tests as integration tests",
+    "e2e: marks tests as end-to-end tests",
+    "benchmark: marks performance benchmark tests"
+]
+

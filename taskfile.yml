@@ -1,0 +1,47 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: "3.0"
+
+set: ['e', 'u', 'pipefail']
+shopt: ['globstar']
+
+dotenv: ['.env']
+
+env:
+  VENV_DIR: "{{.ROOT_DIR}}/.venv"
+  PATH: "{{.VENV_DIR}}/bin:{{.PATH}}"
+
+tasks:
+  default:
+    desc: "List available tasks"
+    cmds:
+      - task --list
+
+  pre-commit:
+    desc: "Run pre-commit hooks"
+    cmds:
+      - prek run --all-files
+
+  lint:
+    desc: "Run linter"
+    sources:
+      - "**/*.py"
+    cmds:
+      - ruff check --fix --respect-gitignore
+
+  format:
+    desc: "Run formatter"
+    sources:
+      - "**/*.py"
+    cmds:
+      - ruff format --respect-gitignore
+
+  test:
+    desc: "Run the test suite"
+    cmds:
+      - uv run pytest {{.CLI_ARGS}}
+
+  scrub:
+    desc: "Fail if any consumer-private identifier leaked into this public repo"
+    cmds:
+      - uv run pytest tests/test_scrub.py -q
