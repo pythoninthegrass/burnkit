@@ -164,6 +164,25 @@ def test_retiring_a_branch_that_does_not_exist_is_harmless(repo: Path, base_sha:
     retire_branch(repo, "agent/never-created", base_sha, TASK, 1)
 
 
+def test_published_work_is_deleted_rather_than_rescued(repo: Path, base_sha: str) -> None:
+    """A rescue branch exists to keep committed work reachable. Once the work is
+    published its commits are already reachable, so rescuing it just accumulates
+    a rescue/ ref per successful task."""
+    sh("git", "checkout", "-q", "-b", "agent/x", cwd=repo)
+    (repo / "work.txt").write_text("real work\n")
+    sh("git", "add", "work.txt", cwd=repo)
+    sh("git", "commit", "-q", "-m", "attempt work", cwd=repo)
+    sh("git", "branch", "shared", cwd=repo)  # stands in for the published ref
+    sh("git", "checkout", "-q", "main", cwd=repo)
+
+    retire_branch(repo, "agent/x", base_sha, TASK, 1, published=True)
+
+    branches = git("branch", "--list", cwd=repo).stdout
+    assert "agent/x" not in branches
+    assert "rescue/" not in branches
+    assert "shared" in branches
+
+
 # --- integration strategies ----------------------------------------------
 
 

@@ -3,7 +3,15 @@ two files that make the queue's decisions survive a process restart."""
 
 import json
 from burnkit.config import BurnConfig
-from burnkit.state import BurnLayout, bump_attempts, load_attempts, load_handled, mark_handled
+from burnkit.state import (
+    BurnLayout,
+    bump_attempts,
+    load_attempts,
+    load_handled,
+    mark_handled,
+    read_fallback_planner,
+    record_fallback_planner,
+)
 
 
 def test_layout_derives_every_path_from_one_root(config: BurnConfig) -> None:
@@ -65,3 +73,25 @@ def test_layout_is_usable_without_a_full_config(tmp_path) -> None:
     whole BurnConfig."""
     layout = BurnLayout(tmp_path / "burn")
     assert layout.pids == tmp_path / "burn" / "pids"
+
+
+def test_no_fallback_planner_is_recorded_by_default(config: BurnConfig) -> None:
+    assert read_fallback_planner(config.layout) is None
+
+
+def test_a_recorded_fallback_planner_round_trips(config: BurnConfig) -> None:
+    """On disk rather than in memory for the same reason attempts are: a run
+    that demoted its planner after three fast failures must stay demoted across
+    a restart, or the next launch walks back into the same failing provider."""
+    layout = config.layout
+    record_fallback_planner(layout, "local-model", "local-provider")
+    assert read_fallback_planner(layout) == ("local-model", "local-provider")
+    assert layout.planner_override.exists()
+
+
+def test_a_malformed_planner_override_reads_as_absent(config: BurnConfig) -> None:
+    """A hand-edited or truncated sentinel must not crash a whole overnight run."""
+    layout = config.layout
+    layout.planner_override.parent.mkdir(parents=True, exist_ok=True)
+    layout.planner_override.write_text("nonsense-with-no-separator\n")
+    assert read_fallback_planner(layout) is None

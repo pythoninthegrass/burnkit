@@ -11,12 +11,12 @@ import subprocess
 import sys
 from burnkit import prompt
 from burnkit.backend import Backend, dsh_backend, hermes_backend, preflight_hooks_for, resolve_backend
-from burnkit.config import BurnConfig
+from burnkit.config import BurnConfig, base_ref
 from burnkit.gates import verify
 from burnkit.integration import retire_branch
 from burnkit.proc import git, kill_all, kill_task_processes, launch, launch_env, wait_for_exit
 from burnkit.queue import branch_name, load_tasks, next_ready, task_md
-from burnkit.state import bump_attempts, load_attempts, mark_handled, now
+from burnkit.state import bump_attempts, load_attempts, mark_handled, now, read_fallback_planner, record_fallback_planner
 from pathlib import Path
 
 EXIT_KILLED = 1
@@ -63,11 +63,13 @@ def ensure_mirror(config: BurnConfig) -> None:
     hook problem rather than a real state issue.
     """
     mirror = config.layout.mirror
-    git("fetch", "origin", config.base_branch, cwd=config.repo)
+    ref = base_ref(config)
+    if config.base_remote:
+        git("fetch", config.base_remote, config.base_branch, cwd=config.repo)
     if not mirror.exists():
-        git("worktree", "add", "--detach", str(mirror), f"origin/{config.base_branch}", cwd=config.repo, check=False)
+        git("worktree", "add", "--detach", str(mirror), ref, cwd=config.repo, check=False)
     else:
-        git("checkout", "--detach", f"origin/{config.base_branch}", cwd=mirror, check=False)
+        git("checkout", "--detach", ref, cwd=mirror, check=False)
 
 
 def _remove_worktree(repo: Path, wt: Path) -> None:
@@ -103,7 +105,7 @@ def cmd_run(
 
         ensure_mirror(config)  # refresh to the latest base tip before cutting a new branch
         t = load_tasks(layout.mirror, config.tasks_dir, config.dep_dirs)[task]
-        base_sha = git("rev-parse", f"origin/{config.base_branch}", cwd=config.repo).stdout.strip()
+        base_sha = git("rev-parse", base_ref(config), cwd=config.repo).stdout.strip()
         branch = branch_name(task, t.title)
         wt = layout.worktrees / task
         _remove_worktree(config.repo, wt)
@@ -166,7 +168,15 @@ def cmd_run(
             layout.write_heartbeat(task, attempt, "end", f"{'BLOCKED' if blocked else 'FAILED'} {reason[:120]}")
             fast_fails = fast_fails + 1 if elapsed < config.fast_fail_s else 0
             if fast_fails >= 3:
-                layout.write_heartbeat(task, attempt, "warn", "3 fast fails in a row -- check agent/model health")
+                # Three runs dying inside the fast-fail window is provider
+                # trouble, not task trouble. A consumer that declared a fallback
+                # planner gets demoted onto it rather than burning the rest of
+                # the queue against a sick endpoint.
+                if config.fallback_model and read_fallback_planner(layout) is None:
+                    record_fallback_planner(layout, config.fallback_model, config.fallback_provider)
+                    layout.write_heartbeat(task, attempt, "fallback", f"planner -> {config.fallback_model}")
+                else:
+                    layout.write_heartbeat(task, attempt, "warn", "3 fast fails in a row -- check agent/model health")
                 fast_fails = 0
             if blocked:
                 _remove_worktree(config.repo, wt)
@@ -180,7 +190,7 @@ def cmd_run(
                 return EXIT_BLOCKED
 
         _remove_worktree(config.repo, wt)
-        retire_branch(config.repo, branch, base_sha, task, attempt)  # local ref only
+        retire_branch(config.repo, branch, base_sha, task, attempt, published=bool(published))  # local ref only
         kill_task_processes(layout, task)  # belt-and-braces: nothing survives a task boundary
         if once:
             break
@@ -220,6 +230,10 @@ def cmd_status(config: BurnConfig) -> int:
         counts[t.status] = counts.get(t.status, 0) + 1
     print("backlog:", " ".join(f"{k}={v}" for k, v in sorted(counts.items())))
     print("next ready:", next_ready(config, layout.mirror) or "none (queue drained or stalled on the skip list)")
+    # Gated on the consumer having declared a fallback, for the same reason
+    # backend.planner is: an inert sentinel must not read as an active override.
+    if config.fallback_model and (override := read_fallback_planner(layout)) is not None:
+        print("planner override:", "|".join(override))
     blocked = {tid: n for tid, n in load_attempts(layout).items() if n >= config.max_attempts}
     if blocked:
         print("blocked (exhausted attempts, needs triage):", ", ".join(f"{k}({v})" for k, v in sorted(blocked.items())))

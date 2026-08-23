@@ -12,6 +12,7 @@ print DONE and *describe* bookkeeping it never actually performed. Every step
 after the marker exists to catch a variant of that.
 """
 
+import dataclasses
 import pytest
 from burnkit import prompt
 from burnkit.config import BurnConfig
@@ -162,7 +163,7 @@ def test_a_code_task_must_clear_the_machine_gates(config: BurnConfig, wt: Path, 
     commit(wt, "src/clamp.c")
     calls: list[list[str]] = []
 
-    def run(cmd, cwd, env=None):
+    def run(cmd, cwd, env=None, **_):
         calls.append(list(cmd))
         return FakeProc(1, "", "linker error")
 
@@ -177,7 +178,7 @@ def test_a_green_code_task_is_measured_local(config: BurnConfig, wt: Path, base_
     write_task_file(wt, config)
     commit(wt, "src/clamp.c")
     verdict = verify_it(
-        config, wt, log_with(tmp_path, prompt.done_marker(TASK)), base_sha, run=lambda cmd, cwd, env=None: FakeProc(0, "ok")
+        config, wt, log_with(tmp_path, prompt.done_marker(TASK)), base_sha, run=lambda cmd, cwd, env=None, **_: FakeProc(0, "ok")
     )
     assert verdict.ok
     assert verdict.trust == TRUST_MEASURED_LOCAL
@@ -193,7 +194,60 @@ def test_a_prose_task_never_runs_a_machine_gate(config: BurnConfig, wt: Path, ba
         wt,
         log_with(tmp_path, prompt.done_marker(TASK)),
         base_sha,
-        run=lambda cmd, cwd, env=None: pytest.fail("ran a gate for a non-code task"),
+        run=lambda cmd, cwd, env=None, **_: pytest.fail("ran a gate for a non-code task"),
+    )
+
+
+def test_no_phase_parent_is_closed_out_unless_the_consumer_asked(
+    config: BurnConfig, wt: Path, base_sha: str, tmp_path: Path
+) -> None:
+    """A consumer publishing one pull request per task wants the parent left to
+    a human; only a shared-branch consumer wants it swept up automatically."""
+    write_task_file(wt, config)
+    commit(wt, "docs/notes.md")
+    verify(
+        config,
+        TASK,
+        wt,
+        log_with(tmp_path, prompt.done_marker(TASK)),
+        base_sha,
+        ensure_done=noop_backlog_done,
+        close_out=lambda task, w: pytest.fail("closed out a phase parent without being asked"),
+    )
+
+
+def test_the_phase_parent_closeout_runs_before_publication(config: BurnConfig, wt: Path, base_sha: str, tmp_path: Path) -> None:
+    """Before, not after: the parent's own Done commit then rides the published
+    branch instead of being written into the consumer's checkout behind its back."""
+    cfg = dataclasses.replace(config, close_out_phase_parents=True)
+    write_task_file(wt, cfg)
+    commit(wt, "docs/notes.md")
+    closed: list[str] = []
+    verdict = verify(
+        cfg,
+        TASK,
+        wt,
+        log_with(tmp_path, prompt.done_marker(TASK)),
+        base_sha,
+        ensure_done=noop_backlog_done,
+        close_out=lambda task, w: closed.append(task),
+    )
+    assert verdict.ok
+    assert closed == [TASK]
+
+
+def test_a_failing_task_closes_out_nothing(config: BurnConfig, wt: Path, base_sha: str, tmp_path: Path) -> None:
+    cfg = dataclasses.replace(config, close_out_phase_parents=True)
+    write_task_file(wt, cfg, body=ONE_UNCHECKED)
+    commit(wt, "docs/notes.md")
+    verify(
+        cfg,
+        TASK,
+        wt,
+        log_with(tmp_path, prompt.done_marker(TASK)),
+        base_sha,
+        ensure_done=noop_backlog_done,
+        close_out=lambda task, w: pytest.fail("closed out a phase parent for a failed task"),
     )
 
 

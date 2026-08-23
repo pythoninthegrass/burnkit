@@ -10,11 +10,13 @@ coupled to; a fully-local backend is not asked to satisfy a rule that exists to
 keep content away from a third party.
 """
 
+import shutil
 import subprocess
 import time
 import urllib.request
 from burnkit.config import BurnConfig
 from burnkit.proc import EXIT_MARKER
+from burnkit.state import read_fallback_planner
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -54,6 +56,25 @@ def _noop_prepare(task: str, wt: Path) -> None:
     return None
 
 
+def copy_prepare(repo: Path, rels: tuple[str, ...]) -> Callable[[str, Path], None]:
+    """Build a prepare_worktree that copies out-of-tree files into the worktree.
+
+    A copy rather than a link because a gate may run a tool that writes to the
+    file, and that must not reach back into the consumer's own checkout. Use
+    symlink_prepare for content that is only ever read.
+    """
+
+    def prepare(task: str, wt: Path) -> None:
+        for rel in rels:
+            src = repo / rel
+            dst = wt / rel
+            if src.is_file() and not dst.exists():
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+
+    return prepare
+
+
 def symlink_prepare(repo: Path, rels: tuple[str, ...]) -> Callable[[str, Path], None]:
     """Build a prepare_worktree that links out-of-tree content into the worktree,
     so a local agent reads it like any other file instead of through env roots.
@@ -72,6 +93,19 @@ def symlink_prepare(repo: Path, rels: tuple[str, ...]) -> Callable[[str, Path], 
     return prepare
 
 
+def planner(config: BurnConfig) -> tuple[str, str]:
+    """The (model, provider) the next launch plans with.
+
+    Read per launch rather than once at startup, so a run that demotes its
+    planner mid-queue launches the very next task on the demoted one. Demotion
+    is strictly opt-in: with no fallback declared, a stale sentinel left behind
+    by another consumer cannot silently redirect this one.
+    """
+    if config.fallback_model and (override := read_fallback_planner(config.layout)) is not None:
+        return override
+    return config.model, config.provider
+
+
 def hermes_backend(
     config: BurnConfig,
     *,
@@ -79,12 +113,13 @@ def hermes_backend(
     launch_line: str | None = None,
 ) -> Backend:
     def task_env(task: str, prompt_file: Path, log: Path) -> dict[str, str]:
+        model, provider = planner(config)
         return {
             "BURN_PROMPT": str(prompt_file),
             "BURN_LOG": str(log),
             "BURN_PIDFILE": str(config.layout.pids / task),
-            "BURN_MODEL": config.model,
-            "BURN_PROVIDER": config.provider,
+            "BURN_MODEL": model,
+            "BURN_PROVIDER": provider,
             "BURN_MAX_TURNS": str(config.max_turns),
             **config.launch_env(task, "hermes"),
         }

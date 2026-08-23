@@ -50,6 +50,11 @@ class BurnLayout:
         return self.root / "review-queue.md"
 
     @property
+    def planner_override(self) -> Path:
+        """Set when a run demotes its planner to the consumer's fallback."""
+        return self.root / "PLANNER_OVERRIDE"
+
+    @property
     def pids(self) -> Path:
         return self.root / "pids"
 
@@ -92,6 +97,26 @@ def mark_handled(layout: BurnLayout, task: str) -> None:
     layout.handled.parent.mkdir(parents=True, exist_ok=True)
     with layout.handled.open("a") as f:
         f.write(task + "\n")
+
+
+def record_fallback_planner(layout: BurnLayout, model: str, provider: str) -> None:
+    """Demote the planner for every subsequent launch in this run.
+
+    On disk for the same reason attempts are: a run that gave up on its primary
+    provider after repeated fast failures must stay demoted across a restart,
+    or the next launch walks straight back into the failing provider.
+    """
+    layout.planner_override.parent.mkdir(parents=True, exist_ok=True)
+    layout.planner_override.write_text(f"{model}|{provider}\n")
+
+
+def read_fallback_planner(layout: BurnLayout) -> tuple[str, str] | None:
+    """A malformed sentinel reads as absent rather than raising — this is read
+    on every launch, and a hand-edited file should not end an overnight run."""
+    if not layout.planner_override.exists():
+        return None
+    model, _, provider = layout.planner_override.read_text().strip().partition("|")
+    return (model, provider) if model and provider else None
 
 
 def load_attempts(layout: BurnLayout) -> dict[str, int]:

@@ -14,7 +14,10 @@ Every function here takes its policy as an argument. None of them read module
 state.
 """
 
+import contextlib
+import os
 import re
+import signal
 import subprocess
 from burnkit import prompt
 from burnkit.config import BurnConfig, MachineGate
@@ -31,7 +34,7 @@ TRUST_MEASURED_LOCAL = "measured_local"
 _AC_HEADER_RE = re.compile(r"^## Acceptance Criteria\s*$", re.MULTILINE)
 _AC_ITEM_RE = re.compile(r"^-\s*\[( |x|X)\]\s*#(\d+)\s+(.*)$")
 
-_GATE_TIMEOUT_S = 1800
+DEFAULT_GATE_TIMEOUT_S = 1800
 
 
 @dataclass
@@ -68,8 +71,33 @@ def _tail(text: str, n: int = 1500) -> str:
     return text if len(text) <= n else "...\n" + text[-n:]
 
 
-def _gate_run(cmd: list[str], cwd: Path, env: dict | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=_GATE_TIMEOUT_S, check=False)
+def _gate_run(
+    cmd: list[str], cwd: Path, env: dict | None = None, timeout_s: int = DEFAULT_GATE_TIMEOUT_S
+) -> subprocess.CompletedProcess:
+    """Run one gate in its own process group.
+
+    The group is what makes a timeout recoverable. A gate that hangs is usually
+    hanging inside a tree of helpers it spawned (a build tool, an emulator, a
+    compositor), and killing only the direct child leaves those reparented and
+    running, where they interfere with the next gate. Terminating the group
+    reaches all of them without ever matching on a process name -- see proc.py
+    for why no pattern-matching kill is allowed here.
+
+    A timeout is returned as a failed gate rather than raised, so one hung gate
+    fails its own task instead of ending the whole overnight run. 124 is the
+    exit code GNU `timeout` uses for the same condition.
+    """
+    proc = subprocess.Popen(
+        cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        stdout, stderr = proc.communicate()
+        return subprocess.CompletedProcess(cmd, 124, stdout or "", (stderr or "") + f"\ngate timed out after {timeout_s}s")
+    return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
 
 
 def changed_paths(wt: Path, base_sha: str) -> list[str]:
@@ -108,7 +136,7 @@ def run_machine_gates(
     run = run or _gate_run
     report = GateReport()
     for gate in gates:
-        cp = run(list(gate.argv), wt, env)
+        cp = run(list(gate.argv), wt, env, timeout_s=gate.timeout_s or DEFAULT_GATE_TIMEOUT_S)
         report.results.append(GateResult(gate.name, cp.returncode == 0, _tail((cp.stdout or "") + (cp.stderr or ""))))
         if cp.returncode != 0:
             break
@@ -164,6 +192,42 @@ def ensure_backlog_done(config: BurnConfig, task: str, wt: Path) -> None:
     )
 
 
+def phase_parent_to_close(tasks: dict[str, Task], task: str) -> str | None:
+    """The phase parent of `task` if every one of its leaves is now Done.
+
+    A phase parent is bookkeeping over its leaves, so nothing but the leaves can
+    say when it is finished.
+    """
+    t = tasks.get(task)
+    if t is None or t.parent_task_id is None:
+        return None
+    parent = tasks.get(t.parent_task_id)
+    if parent is None or parent.status == "Done":
+        return None
+    siblings = [x for x in tasks.values() if x.parent_task_id == t.parent_task_id]
+    if siblings and all(s.status == "Done" for s in siblings):
+        return parent.id
+    return None
+
+
+def close_out_phase_parent(config: BurnConfig, task: str, wt: Path) -> None:
+    """Mark the task's phase parent Done, in the worktree, if its leaves are all
+    Done.
+
+    In the worktree rather than the consumer's checkout so the parent's own Done
+    commit rides the published branch, instead of being written into a tree a
+    human may be using.
+    """
+    tasks = load_tasks(wt, config.tasks_dir, ())
+    parent = phase_parent_to_close(tasks, task)
+    if parent is None:
+        return
+    leaves = sum(1 for x in tasks.values() if x.parent_task_id == parent)
+    backlog("task", "edit", parent, "-s", "Done", cwd=wt, check=False)
+    git("add", config.tasks_dir, cwd=wt, check=False)
+    git("commit", "-m", f"chore(backlog): close out {parent} ({leaves} leaves Done)", cwd=wt, check=False)
+
+
 def verify(
     config: BurnConfig,
     task: str,
@@ -174,6 +238,7 @@ def verify(
     env: dict | None = None,
     run: Callable[..., subprocess.CompletedProcess] | None = None,
     ensure_done: Callable[[str, Path], None] | None = None,
+    close_out: Callable[[str, Path], None] | None = None,
 ) -> Verdict:
     """The whole gate, in the order the gates run.
 
@@ -182,6 +247,7 @@ def verify(
     gates green.
     """
     ensure_done = ensure_done or partial(ensure_backlog_done, config)
+    close_out = close_out or partial(close_out_phase_parent, config)
     text = log.read_text(errors="replace") if log.exists() else ""
     finished, reason = prompt.parse_marker(text, task)
     if not finished:
@@ -193,6 +259,8 @@ def verify(
     if unchecked:
         return Verdict(False, f"unchecked acceptance criteria: {', '.join(unchecked)}")
     ensure_done(task, wt)
+    if config.close_out_phase_parents:
+        close_out(task, wt)
     changed = changed_paths(wt, base_sha)
     if not is_code_change(changed, config.code_change_prefixes):
         return Verdict(True, f"{commits} commits")

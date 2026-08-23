@@ -60,14 +60,18 @@ def append_review_queue(queue_file: Path, task: str, branch: str, summary: str, 
         f.write(f"- {now()} `{task}` `{branch}` [{trust}] -- {summary}\n")
 
 
-def retire_branch(repo: Path, branch: str, base_sha: str, task: str, attempt: int) -> None:
+def retire_branch(repo: Path, branch: str, base_sha: str, task: str, attempt: int, *, published: bool = False) -> None:
     """Delete a task's attempt branch -- unless it carries commits beyond
     base_sha, in which case rename it to rescue/<task>.a<attempt> instead of
     force-deleting it. A failed attempt can still have produced real, committed
     work; only the reflog survives a bare `git branch -D`, which isn't enough to
-    recover it before the next `git gc`."""
+    recover it before the next `git gc`.
+
+    `published` skips the rescue: the commits are already reachable from
+    whatever the integration strategy published, so a rescue ref would only
+    accumulate one dead branch per successful task."""
     head = git("rev-parse", "--verify", branch, cwd=repo, check=False).stdout.strip()
-    if head and head != base_sha:
+    if head and head != base_sha and not published:
         rescue = f"rescue/{task}.a{attempt}"
         git("branch", "-D", rescue, cwd=repo, check=False)
         git("branch", "-m", branch, rescue, cwd=repo, check=False)

@@ -8,15 +8,17 @@ and the proof-of-done gates.
 
 from burnkit.backend import (
     Backend,
+    copy_prepare,
     dsh_backend,
     hermes_backend,
+    planner,
     preflight_hooks_for,
     preflight_lemonade,
     resolve_backend,
     symlink_prepare,
 )
 from burnkit.cli import main, run_from_cli
-from burnkit.config import BurnConfig, MachineGate, PreflightHook
+from burnkit.config import ANY_PATH, BurnConfig, MachineGate, PreflightHook, base_ref
 
 # forensics is deliberately absent: it needs the `forensics` extra, so importing
 # it here would make jq a hard requirement of `import burnkit`.
@@ -33,6 +35,7 @@ from burnkit.integration import FastForwardBranch, PullRequestPerTask
 from burnkit.state import BurnLayout
 
 __all__ = [
+    "ANY_PATH",
     "TRUST_AGENT_ATTESTED",
     "TRUST_MEASURED_LOCAL",
     "Backend",
@@ -45,11 +48,14 @@ __all__ = [
     "PreflightHook",
     "PullRequestPerTask",
     "Verdict",
+    "base_ref",
+    "copy_prepare",
     "dsh_backend",
     "hermes_backend",
     "iter_events",
     "limited",
     "main",
+    "planner",
     "preflight_hooks_for",
     "preflight_lemonade",
     "resolve_backend",

@@ -15,14 +15,17 @@ from burnkit.backend import (
     DSH_CMD,
     HERMES_CMD,
     Backend,
+    copy_prepare,
     dsh_backend,
     hermes_backend,
+    planner,
     resolve_backend,
     symlink_prepare,
 )
 from burnkit.cli import build_arg_parser
 from burnkit.config import BurnConfig
 from burnkit.proc import EXIT_MARKER
+from burnkit.state import record_fallback_planner
 from pathlib import Path
 
 
@@ -158,6 +161,97 @@ def test_symlink_prepare_leaves_an_existing_path_alone(tmp_path: Path) -> None:
     (wt / "data").mkdir(parents=True)
     symlink_prepare(repo, ("data",))("WK-000.01", wt)
     assert not (wt / "data").is_symlink()
+
+
+def test_copy_prepare_copies_the_requested_files(tmp_path: Path) -> None:
+    """A copy, not a symlink: a gate may run a tool that writes to the file, and
+    that must not reach back into the consumer's own checkout."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "fixture.bin").write_bytes(b"\x01\x02")
+    wt = tmp_path / "wt"
+    wt.mkdir()
+
+    copy_prepare(repo, ("fixture.bin",))("WK-000.01", wt)
+
+    assert (wt / "fixture.bin").read_bytes() == b"\x01\x02"
+    assert not (wt / "fixture.bin").is_symlink()
+
+
+def test_a_copied_file_is_isolated_from_the_original(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "fixture.bin").write_bytes(b"\x01")
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    copy_prepare(repo, ("fixture.bin",))("WK-000.01", wt)
+    (wt / "fixture.bin").write_bytes(b"\xff")
+    assert (repo / "fixture.bin").read_bytes() == b"\x01"
+
+
+def test_copy_prepare_tolerates_a_missing_source(tmp_path: Path) -> None:
+    """The file is an optional local artifact; a checkout without it still runs."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    copy_prepare(repo, ("fixture.bin",))("WK-000.01", wt)  # must not raise
+    assert not (wt / "fixture.bin").exists()
+
+
+def test_copy_prepare_leaves_an_existing_file_alone(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "fixture.bin").write_bytes(b"\x01")
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    (wt / "fixture.bin").write_bytes(b"\xee")
+    copy_prepare(repo, ("fixture.bin",))("WK-000.01", wt)
+    assert (wt / "fixture.bin").read_bytes() == b"\xee"
+
+
+# --- planner demotion -----------------------------------------------------
+
+
+def test_the_planner_defaults_to_the_configured_model(config: BurnConfig) -> None:
+    cfg = dataclasses.replace(config, model="remote-model", provider="remote-provider")
+    assert planner(cfg) == ("remote-model", "remote-provider")
+
+
+def test_a_recorded_fallback_takes_over_the_planner(config: BurnConfig) -> None:
+    """Read per launch, not once at startup: a run that demotes its planner
+    mid-queue must launch the next task on the demoted one."""
+    cfg = dataclasses.replace(
+        config,
+        model="remote-model",
+        provider="remote-provider",
+        fallback_model="local-model",
+        fallback_provider="local-provider",
+    )
+    record_fallback_planner(cfg.layout, "local-model", "local-provider")
+    assert planner(cfg) == ("local-model", "local-provider")
+
+
+def test_a_recorded_fallback_is_ignored_when_the_consumer_declared_none(config: BurnConfig) -> None:
+    """Demotion is strictly opt-in, so a stale sentinel cannot silently redirect
+    a consumer that never asked for a fallback."""
+    cfg = dataclasses.replace(config, model="remote-model", provider="remote-provider")
+    record_fallback_planner(cfg.layout, "local-model", "local-provider")
+    assert planner(cfg) == ("remote-model", "remote-provider")
+
+
+def test_hermes_launches_on_the_demoted_planner(config: BurnConfig) -> None:
+    cfg = dataclasses.replace(
+        config,
+        model="remote-model",
+        provider="remote-provider",
+        fallback_model="local-model",
+        fallback_provider="local-provider",
+    )
+    record_fallback_planner(cfg.layout, "local-model", "local-provider")
+    env = hermes_backend(cfg).task_env("WK-000.00", Path("/p"), Path("/l"))
+    assert env["BURN_MODEL"] == "local-model"
+    assert env["BURN_PROVIDER"] == "local-provider"
 
 
 def test_the_default_prepare_worktree_is_a_noop(config: BurnConfig, tmp_path: Path) -> None:
