@@ -40,7 +40,7 @@ That gives the consumer `driver.py {run,resume,status,kill}`. `run` takes
 Required, in positional order:
 
 | Field | Meaning |
-|---|---|
+| --- | --- |
 | `project` | Slug used in heartbeats and log lines |
 | `burn_dir` | Root of the run's state directory (see [Layout](#layout)) |
 | `repo` | The consumer's own checkout; worktrees are cut from it |
@@ -48,7 +48,7 @@ Required, in positional order:
 ### Publication
 
 | Field | Default | Meaning |
-|---|---|---|
+| --- | --- | --- |
 | `repo_slug` | `""` | `owner/name`, for a strategy that opens pull requests |
 | `base_branch` | `"main"` | Branch every attempt is cut from and published to |
 | `base_remote` | `"origin"` | Remote holding `base_branch`. **Empty** for a branch that deliberately never leaves the machine — there is then no remote-tracking ref, and asking for one fails every task |
@@ -58,7 +58,7 @@ Required, in positional order:
 ### Task queue
 
 | Field | Default | Meaning |
-|---|---|---|
+| --- | --- | --- |
 | `task_id_prefix` | `""` | e.g. `"PROJ"`; drives marker text and branch names |
 | `example_task_id` | `""` | A real id, shown in the prompt so the agent sees the shape |
 | `tasks_dir` | `"backlog/tasks"` | Live task files, repo-relative |
@@ -68,7 +68,7 @@ Required, in positional order:
 ### Models and endpoints
 
 | Field | Default | Meaning |
-|---|---|---|
+| --- | --- | --- |
 | `model` / `provider` | `""` | The planner |
 | `builder_model` / `builder_provider` | `""` | The delegated implementer, if the agent has one |
 | `fallback_model` / `fallback_provider` | `""` | Planner to demote to after three consecutive fast failures. **Empty disables demotion** — a stale override sentinel cannot redirect a run that never opted in |
@@ -82,7 +82,7 @@ Required, in positional order:
 ### Loop limits
 
 | Field | Default | Meaning |
-|---|---|---|
+| --- | --- | --- |
 | `task_timeout_s` | `3600` | Wall-clock ceiling for one agent session |
 | `max_attempts` | `2` | Attempts per task before it is left for triage |
 | `max_turns` | `150` | Passed to the agent |
@@ -92,7 +92,7 @@ Required, in positional order:
 ### Gating
 
 | Field | Default | Meaning |
-|---|---|---|
+| --- | --- | --- |
 | `code_change_prefixes` | `()` | A diff touching one of these makes the task a *code* task, which must clear the machine gates. Use `ANY_PATH` for "every task is a code task" |
 | `code_task_allowed_prefixes` | `()` | Where a code task's diff is allowed to land; anything outside is a scope violation. Use `ANY_PATH` to disable the scope gate |
 | `machine_gates` | `()` | See [`MachineGate`](#machinegate) |
@@ -105,7 +105,7 @@ empty tuple means the *opposite* in both selectors: no path matches.
 ### Prompt
 
 | Field | Default | Meaning |
-|---|---|---|
+| --- | --- | --- |
 | `prompt_project_fragment` | `None` | The consumer's own prose: role line, hard rules, verification bar |
 | `prompt_backend_fragments` | `{}` | Per-backend fragment paths. Defaults to `prompt_header.<backend>.txt` beside the project fragment |
 | `context7_line` | `""` | One line about documentation tooling available to the agent |
@@ -119,7 +119,7 @@ class hierarchy. `hermes_backend(config, ...)` and `dsh_backend(config, ...)`
 build the two that ship; a consumer can build its own.
 
 | Field | Meaning |
-|---|---|
+| --- | --- |
 | `name` | Key in the `BACKENDS` dict and the `--backend` value |
 | `remote_planner` | Whether the planning step leaves the machine. This is the real semantic — `remote_planner_only` preflight hooks are gated on it, and nothing about worktree contents is implied |
 | `shell_cmd` | The one-shot shell the launcher runs. Must write `$$` to `$BURN_PIDFILE` (see [Termination](#termination)) and append the exit marker to `$BURN_LOG` |
@@ -219,7 +219,7 @@ the same constants in `burnkit.prompt`. Never hand-write a marker string into a
 prompt fragment.
 
 | Constant | Value |
-|---|---|
+| --- | --- |
 | `prompt.DONE_TEMPLATE` | `=== TASK:DONE {task} ===` |
 | `prompt.BAIL_TEMPLATE` | `=== TASK:BAIL {task} reason={reason} ===` |
 | `prompt.TASK_FILE_SEPARATOR` | `=== TASK FILE ===` |
@@ -268,7 +268,7 @@ the only option left.
 `burn_dir` holds all run state, so a run survives a restart:
 
 | Path | Contents |
-|---|---|
+| --- | --- |
 | `KILL` | Sentinel; the loop stops when it appears |
 | `status/state.log` | Append-only progress record |
 | `mirror/` | Detached worktree at the base tip, read for the queue so the consumer's own checkout is never touched |
@@ -284,7 +284,7 @@ the only option left.
 ## Exit codes
 
 | Code | Meaning |
-|---|---|
+| --- | --- |
 | `0` | Queue drained, or `--once` finished |
 | `1` | The `KILL` sentinel was seen |
 | `3` | `health_check` returned False |
@@ -299,7 +299,7 @@ Two distinct sets, both spelled `BURN_*`, which is worth keeping straight.
 consumes these:
 
 | Variable | Set by |
-|---|---|
+| --- | --- |
 | `BURN_PROMPT` | both backends — path to the composed prompt |
 | `BURN_LOG` | both backends — path to tee the session into |
 | `BURN_PIDFILE` | both backends — where `shell_cmd` must write `$$` |
