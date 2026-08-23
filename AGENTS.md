@@ -50,8 +50,16 @@ Three abstractions carry the variation:
 - **`PreflightHook`** — `check(worktree) -> list[str]` returning offenders. A
   non-empty list aborts the launch. This is how a consumer enforces a
   content-boundary that burnkit has no vocabulary for.
-- **`Integration`** — the publish strategy (`prepare` → `publish` → `retire`).
-  Per-task pull request, or fast-forward into a shared branch.
+- **Integration** — the publish strategy: one `publish(task, title, branch, wt,
+  *, trust, report, launch_line) -> str | None` method, no base class. Per-task
+  pull request, or fast-forward into a shared branch. Cutting the attempt branch
+  and retiring it afterwards belong to `cli`, not to the strategy.
+
+Every config field, both contracts, the marker protocol, the `burn_dir` layout,
+exit codes, and both sets of `BURN_*` variables are documented in
+[`docs/configuration.md`](docs/configuration.md) — keep it in step with the
+code, since a doc asserting an interface the code does not have is the same
+class of error as narrating a gate that never ran.
 
 ## Hard rules
 

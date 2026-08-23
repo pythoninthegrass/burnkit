@@ -31,6 +31,10 @@ Everything project-shaped, through one `BurnConfig`: models and endpoints,
 repository paths and slug, task-id prefix, gate commands, code-path prefixes,
 prompt prose, preflight hooks, and the publish strategy.
 
+Every field, the `Backend` and integration contracts, the marker protocol, the
+`burn_dir` layout, exit codes, and both sets of `BURN_*` variables:
+[`docs/configuration.md`](docs/configuration.md).
+
 ## Trust classes
 
 A gate result carries where it came from. `measured_local` means burnkit ran
