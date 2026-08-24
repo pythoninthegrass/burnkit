@@ -17,11 +17,11 @@ single executable file:
 # requires-python = ">=3.13,<3.14"
 # dependencies = [
 #     "python-decouple>=3.8",
-#     "burnkit @ git+https://github.com/pythoninthegrass/burnkit@v0.1.0",
+#     "burnkit @ git+https://github.com/pythoninthegrass/burnkit@v0.2.0",
 # ]
 # ///
 
-from burnkit import BurnConfig, MachineGate, PullRequestPerTask, hermes_backend, run_from_cli
+from burnkit import BurnConfig, MachineGate, hermes_backend, run_from_cli
 from decouple import config
 from pathlib import Path
 
@@ -29,11 +29,15 @@ CONFIG = BurnConfig(project="myproject", burn_dir=Path.home() / "burn", repo=Pat
 BACKENDS = {"hermes": hermes_backend(CONFIG)}
 
 if __name__ == "__main__":
-    run_from_cli(CONFIG, PullRequestPerTask(CONFIG), BACKENDS)
+    run_from_cli(CONFIG, backends=BACKENDS)
 ```
 
 That gives the consumer `driver.py {run,resume,status,kill}`. `run` takes
-`--backend`, `--once`, and `--task`; `resume` takes `--backend`.
+`--backend`, `--once`, and `--task`; `resume` takes `--backend`. Leaving
+`integration` unset (as above) gets a consumer the default publish strategy --
+see [Integration strategies](#integration-strategies) below. Pass a strategy
+positionally (`run_from_cli(CONFIG, PullRequestPerTask(CONFIG), BACKENDS)`) to
+opt into something else.
 
 ## `BurnConfig`
 
@@ -188,20 +192,37 @@ Anything a strategy needs beyond these arguments comes off `self.config`.
 
 Two ship:
 
+- **`FastForwardBranch(config, branch="burn", push=True, publish_mirror=None)`**
+  — moves a shared branch onto the attempt, refusing anything that is not a
+  fast-forward (a diverged shared branch means someone else published in
+  between). Implemented as an ancestry check plus a ref move rather than `git
+  merge --ff-only`, so it does not depend on what the consumer's repo has
+  checked out. `push=False` keeps the branch local. Returns the shared branch
+  name. Set `publish_mirror` to a path to route the ref move through a
+  dedicated clone instead of `config.repo` directly — needed whenever the
+  branch being fast-forwarded (typically `base_branch`) might be checked out
+  in the consumer's own interactive working copy; git refuses to force-move or
+  fetch into a branch checked out in a sibling worktree of the same repo, but a
+  genuinely separate clone has no such restriction.
 - **`PullRequestPerTask(config)`** — pushes the attempt branch to `origin`,
   appends a `review-queue.md` line, then opens a pull request against
   `config.base_branch` via `gh` with `config.reviewer` requested. Returns the
   branch name. Nothing here touches the consumer's own checkout.
-- **`FastForwardBranch(config, branch="burn", push=True)`** — moves a shared
-  branch onto the attempt, refusing anything that is not a fast-forward (a
-  diverged shared branch means someone else published in between). Implemented
-  as an ancestry check plus a ref move rather than `git merge --ff-only`, so it
-  does not depend on what the consumer's repo has checked out. `push=False`
-  keeps the branch local. Returns the shared branch name.
 
 Both are frozen dataclasses whose first field is the `BurnConfig`, and both
 carry a `name` field for logging. A consumer can supply its own object with the
 same `publish` signature instead — there is no base class to subclass.
+
+### The default: `default_integration(config)`
+
+Not passing `integration` to `main()`/`run_from_cli()` (or passing `None`)
+resolves to `default_integration(config)`: a `FastForwardBranch` fast-forwarding
+`config.base_branch` straight through a dedicated mirror clone at
+`config.layout.publish_mirror`, never through `config.repo` itself. A PR that
+only re-states a gate result the driver already ran tends to get
+rubber-stamped rather than genuinely reviewed, so fast-forward — not
+`PullRequestPerTask` — is what a consumer gets by not choosing. Pass
+`PullRequestPerTask(config)` explicitly to opt back into a PR per task.
 
 Branch retirement is the module-level `retire_branch(repo, branch, base_sha,
 task, attempt, *, published=False)`, called by `cli` after every attempt. A

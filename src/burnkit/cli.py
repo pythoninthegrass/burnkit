@@ -13,7 +13,7 @@ from burnkit import prompt
 from burnkit.backend import Backend, dsh_backend, hermes_backend, preflight_hooks_for, resolve_backend
 from burnkit.config import BurnConfig, base_ref
 from burnkit.gates import verify
-from burnkit.integration import retire_branch
+from burnkit.integration import default_integration, retire_branch
 from burnkit.proc import git, kill_all, kill_task_processes, launch, launch_env, wait_for_exit
 from burnkit.queue import branch_name, load_tasks, next_ready, task_md
 from burnkit.state import bump_attempts, load_attempts, mark_handled, now, read_fallback_planner, record_fallback_planner
@@ -247,10 +247,11 @@ def cmd_status(config: BurnConfig) -> int:
 
 def main(
     config: BurnConfig,
-    integration,
+    integration=None,
     backends: dict[str, Backend] | None = None,
     argv: list[str] | None = None,
 ) -> int:
+    integration = integration or default_integration(config)
     backends = backends or default_backends(config)
     args = build_arg_parser(backends, config.default_backend).parse_args(argv)
     match args.cmd:
@@ -267,5 +268,5 @@ def main(
     return 1
 
 
-def run_from_cli(config: BurnConfig, integration, backends: dict[str, Backend] | None = None) -> None:
+def run_from_cli(config: BurnConfig, integration=None, backends: dict[str, Backend] | None = None) -> None:
     sys.exit(main(config, integration, backends))

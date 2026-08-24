@@ -11,7 +11,14 @@ import dataclasses
 import pytest
 from burnkit.config import BurnConfig
 from burnkit.gates import TRUST_AGENT_ATTESTED, TRUST_MEASURED_LOCAL, GateReport, GateResult
-from burnkit.integration import FastForwardBranch, PullRequestPerTask, append_review_queue, pr_body, retire_branch
+from burnkit.integration import (
+    FastForwardBranch,
+    PullRequestPerTask,
+    append_review_queue,
+    default_integration,
+    pr_body,
+    retire_branch,
+)
 from burnkit.proc import git, sh
 from pathlib import Path
 
@@ -226,3 +233,130 @@ def test_fast_forward_refuses_a_non_fast_forward(repo: Path, config: BurnConfig)
 
     strategy = FastForwardBranch(dataclasses.replace(config, repo=repo), branch="burn", push=False)
     assert strategy.publish(TASK, "some task", "agent/x", repo, trust=TRUST_MEASURED_LOCAL, report=None) is None
+
+
+# --- fast-forward via a dedicated mirror clone -----------------------------
+#
+# `publish_mirror` exists because git refuses to force-move or fetch into a
+# branch checked out in a sibling *worktree* of the same repo -- confirmed
+# empirically while designing this, not from docs. `repo`/`base_sha` above are
+# a single non-bare repo and can't exercise that; these fixtures build a bare
+# `origin` plus a real clone standing in for a consumer's interactive
+# checkout, so `push=True` has somewhere real to land.
+
+
+@pytest.fixture
+def origin_and_checkout(tmp_path: Path) -> tuple[Path, Path, str, str]:
+    """A bare `origin` plus a non-bare clone (`checkout`) with an attempt
+    branch carrying one real commit beyond `main`. Returns (origin, checkout,
+    base_sha, attempt_sha)."""
+    origin = tmp_path / "origin.git"
+    origin.mkdir()
+    sh("git", "init", "-q", "--bare", "-b", "main", cwd=origin)
+
+    checkout = tmp_path / "checkout"
+    sh("git", "clone", "-q", str(origin), str(checkout), cwd=tmp_path)
+    sh("git", "config", "user.email", "test@test", cwd=checkout)
+    sh("git", "config", "user.name", "test", cwd=checkout)
+    (checkout / "f.txt").write_text("base\n")
+    sh("git", "add", "f.txt", cwd=checkout)
+    sh("git", "commit", "-q", "-m", "base", cwd=checkout)
+    sh("git", "push", "-q", "origin", "main", cwd=checkout)
+    base_sha = git("rev-parse", "HEAD", cwd=checkout).stdout.strip()
+
+    sh("git", "checkout", "-q", "-b", "agent/x", cwd=checkout)
+    (checkout / "f.txt").write_text("base\nattempt work\n")
+    sh("git", "commit", "-q", "-am", "attempt work", cwd=checkout)
+    attempt_sha = git("rev-parse", "HEAD", cwd=checkout).stdout.strip()
+    sh("git", "checkout", "-q", "main", cwd=checkout)
+    return origin, checkout, base_sha, attempt_sha
+
+
+def test_fast_forward_via_mirror_publishes_without_touching_the_checkout(
+    config: BurnConfig, origin_and_checkout: tuple[Path, Path, str, str], tmp_path: Path
+) -> None:
+    origin, checkout, base_sha, attempt_sha = origin_and_checkout
+    mirror = tmp_path / "publish-mirror"
+    strategy = FastForwardBranch(dataclasses.replace(config, repo=checkout), branch="main", publish_mirror=mirror)
+
+    published = strategy.publish(TASK, "some task", "agent/x", checkout, trust=TRUST_MEASURED_LOCAL, report=None)
+
+    assert published == "main"
+    assert git("rev-parse", "main", cwd=mirror).stdout.strip() == attempt_sha
+    # pushed all the way to the real remote, not back into the checkout
+    assert git("rev-parse", "main", cwd=origin).stdout.strip() == attempt_sha
+    # the interactive checkout's own branch/working tree is untouched
+    assert git("branch", "--show-current", cwd=checkout).stdout.strip() == "main"
+    assert git("rev-parse", "main", cwd=checkout).stdout.strip() == base_sha
+    assert git("status", "--porcelain", cwd=checkout).stdout.strip() == ""
+
+
+def test_fast_forward_via_mirror_refuses_a_non_fast_forward(
+    config: BurnConfig, origin_and_checkout: tuple[Path, Path, str, str], tmp_path: Path
+) -> None:
+    """A shared main that diverged since the attempt branched off means
+    someone else published in between; fast-forwarding anyway would discard
+    their work."""
+    origin, checkout, _base_sha, _attempt_sha = origin_and_checkout
+    other = tmp_path / "other-checkout"
+    sh("git", "clone", "-q", str(origin), str(other), cwd=tmp_path)
+    sh("git", "config", "user.email", "test@test", cwd=other)
+    sh("git", "config", "user.name", "test", cwd=other)
+    (other / "other.txt").write_text("someone else\n")
+    sh("git", "add", "other.txt", cwd=other)
+    sh("git", "commit", "-q", "-m", "other work", cwd=other)
+    sh("git", "push", "-q", "origin", "main", cwd=other)
+
+    mirror = tmp_path / "publish-mirror"
+    strategy = FastForwardBranch(dataclasses.replace(config, repo=checkout), branch="main", publish_mirror=mirror)
+
+    assert strategy.publish(TASK, "some task", "agent/x", checkout, trust=TRUST_MEASURED_LOCAL, report=None) is None
+
+
+def test_fast_forward_via_mirror_reuses_an_existing_clone(
+    config: BurnConfig, origin_and_checkout: tuple[Path, Path, str, str], tmp_path: Path
+) -> None:
+    """A second publish call in the same run must not re-clone -- it should
+    just refresh the mirror's view of `branch` from origin."""
+    origin, checkout, _base_sha, attempt_sha = origin_and_checkout
+    mirror = tmp_path / "publish-mirror"
+    strategy = FastForwardBranch(dataclasses.replace(config, repo=checkout), branch="main", publish_mirror=mirror)
+    strategy.publish(TASK, "some task", "agent/x", checkout, trust=TRUST_MEASURED_LOCAL, report=None)
+    # A re-clone would recreate the directory from scratch, destroying this --
+    # a more direct signal than `.git`'s mtime, which every git operation
+    # inside the clone also bumps.
+    (mirror / "SENTINEL").write_text("first clone\n")
+
+    # A second attempt branches from the now-published tip, the same way the
+    # real driver loop re-fetches origin/<base_branch> before cutting each
+    # task's branch (cli.ensure_mirror) -- checkout's own local `main` is
+    # never advanced by publish() itself.
+    sh("git", "fetch", "-q", "origin", "main", cwd=checkout)
+    sh("git", "checkout", "-q", "-b", "agent/y", "origin/main", cwd=checkout)
+    (checkout / "f2.txt").write_text("second attempt\n")
+    sh("git", "add", "f2.txt", cwd=checkout)
+    sh("git", "commit", "-q", "-m", "second attempt", cwd=checkout)
+    sh("git", "checkout", "-q", "main", cwd=checkout)
+
+    published = strategy.publish(TASK, "some task", "agent/y", checkout, trust=TRUST_MEASURED_LOCAL, report=None)
+
+    assert published == "main"
+    assert (mirror / "SENTINEL").exists()  # same clone, not re-cloned
+    assert git("rev-parse", "main", cwd=origin).stdout.strip() != attempt_sha  # moved past the first attempt
+
+
+# --- default_integration ---------------------------------------------------
+
+
+def test_default_integration_fast_forwards_via_the_layout_mirror(config: BurnConfig) -> None:
+    strategy = default_integration(config)
+    assert isinstance(strategy, FastForwardBranch)
+    assert strategy.branch == config.base_branch
+    assert strategy.publish_mirror == config.layout.publish_mirror
+
+
+def test_default_integration_is_not_a_pull_request(config: BurnConfig) -> None:
+    """A PR that only re-states a gate result the driver already ran tends to
+    get rubber-stamped -- so PullRequestPerTask must be an explicit opt-in,
+    never what a consumer gets by not choosing."""
+    assert not isinstance(default_integration(config), PullRequestPerTask)

@@ -38,6 +38,16 @@ class BurnLayout:
         return self.root / "mirror"
 
     @property
+    def publish_mirror(self) -> Path:
+        """A genuinely separate clone (not a worktree) that the default
+        publish strategy fast-forwards `base_branch` into. `mirror` above
+        can't serve this: it's a worktree of the same repo, and git refuses
+        to force-move or fetch into a branch checked out in a sibling
+        worktree of the same repo -- which `base_branch` typically is, in
+        whatever interactive checkout `config.repo` points at."""
+        return self.root / "publish-mirror"
+
+    @property
     def handled(self) -> Path:
         return self.root / "handled.txt"
 

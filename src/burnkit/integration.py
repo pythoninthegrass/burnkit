@@ -5,8 +5,14 @@ Two strategies ship here because the drivers burnkit was extracted from differ
 exactly at this point — one opens a pull request per task, the other
 fast-forwards into a shared branch. Everything upstream of publication is
 identical, which is why this is the only place the split lives.
+
+`default_integration` fast-forwards by default: a PR that only re-states a
+gate result the driver already ran tends to get rubber-stamped rather than
+actually reviewed. `PullRequestPerTask` is still here for a consumer that
+wants a human review step in the loop -- pass it explicitly to opt in.
 """
 
+import dataclasses
 import subprocess
 from burnkit.config import BurnConfig
 from burnkit.gates import TRUST_AGENT_ATTESTED, GateReport
@@ -130,6 +136,19 @@ class PullRequestPerTask:
         return branch if r.returncode == 0 else None
 
 
+def _ensure_publish_mirror(mirror: Path, source: Path) -> None:
+    """Clone `source`'s own `origin` remote into `mirror`, if not already
+    present there. Cloning from the remote rather than from `source` itself
+    means a later `git push origin` lands on the real remote, not back into
+    `source`'s own non-bare working copy."""
+    if (mirror / ".git").exists():
+        return
+    origin_url = git("remote", "get-url", "origin", cwd=source).stdout.strip()
+    mirror.parent.mkdir(parents=True, exist_ok=True)
+    git("clone", origin_url, str(mirror), cwd=mirror.parent)
+    git("checkout", "--detach", "HEAD", cwd=mirror)
+
+
 @dataclass(frozen=True)
 class FastForwardBranch:
     """Fast-forward a shared branch onto the attempt, refusing anything that
@@ -138,11 +157,21 @@ class FastForwardBranch:
     Implemented as an ancestry check plus a ref move rather than `git merge
     --ff-only`, so publication does not depend on which branch the consumer's
     repo happens to have checked out.
+
+    `publish_mirror`, if set, routes the ref move through a dedicated clone
+    instead of operating on `config.repo` directly. Git refuses to
+    force-move or fetch into a branch checked out in a sibling *worktree* of
+    the same repo -- confirmed empirically, not from docs -- so
+    fast-forwarding a branch a human might have checked out interactively
+    (typically `base_branch`) needs a genuinely separate `.git`, not just
+    another worktree of `config.repo`'s. Leave it unset when `config.repo`
+    is already a dedicated, non-interactive location.
     """
 
     config: BurnConfig
     branch: str = "burn"
     push: bool = True
+    publish_mirror: Path | None = None
     name: str = "fast-forward-branch"
 
     def publish(
@@ -156,6 +185,8 @@ class FastForwardBranch:
         report: GateReport | None = None,
         launch_line: str | None = None,
     ) -> str | None:
+        if self.publish_mirror is not None:
+            return self._publish_via_mirror(task, title, branch, wt, trust=trust, report=report, launch_line=launch_line)
         repo = self.config.repo
         sha = git("rev-parse", branch, cwd=repo, check=False).stdout.strip()
         if not sha:
@@ -174,3 +205,43 @@ class FastForwardBranch:
         if self.push:
             git("push", "origin", self.branch, cwd=repo, check=False)
         return self.branch
+
+    def _publish_via_mirror(
+        self,
+        task: str,
+        title: str,
+        branch: str,
+        wt: Path,
+        *,
+        trust: str,
+        report: GateReport | None,
+        launch_line: str | None,
+    ) -> str | None:
+        mirror = self.publish_mirror
+        _ensure_publish_mirror(mirror, self.config.repo)
+        # Refresh the mirror's view of `branch` from the real remote first --
+        # otherwise the ancestry check below could run against a ref left
+        # stale by an earlier publish() call in this same run.
+        if git("fetch", "origin", self.branch, cwd=mirror, check=False).returncode != 0:
+            return None
+        if git("branch", "-f", self.branch, f"origin/{self.branch}", cwd=mirror, check=False).returncode != 0:
+            return None
+        # The mirror shares no objects with the worktree the attempt was
+        # committed in, so its commits have to be fetched in explicitly.
+        if git("fetch", str(self.config.repo), branch, cwd=mirror, check=False).returncode != 0:
+            return None
+        delegate = dataclasses.replace(self, config=dataclasses.replace(self.config, repo=mirror), publish_mirror=None)
+        return delegate.publish(task, title, "FETCH_HEAD", wt, trust=trust, report=report, launch_line=launch_line)
+
+
+def default_integration(config: BurnConfig) -> FastForwardBranch:
+    """The default publish strategy: fast-forward `base_branch` straight
+    through a dedicated mirror clone at `config.layout.publish_mirror`,
+    never through `config.repo` itself.
+
+    A PR that only re-states a gate result the driver already ran tends to
+    get rubber-stamped rather than actually reviewed, so this -- not
+    `PullRequestPerTask` -- is what a consumer gets by not choosing. Pass
+    `PullRequestPerTask(config)` explicitly to opt back into a PR per task.
+    """
+    return FastForwardBranch(config, branch=config.base_branch, publish_mirror=config.layout.publish_mirror)

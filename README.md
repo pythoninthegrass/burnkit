@@ -45,7 +45,7 @@ explicit human-confirmation banner, never treated as satisfying on its own.
 ## Install
 
 ```bash
-uv add "burnkit @ git+https://github.com/pythoninthegrass/burnkit@v0.1.0"
+uv add "burnkit @ git+https://github.com/pythoninthegrass/burnkit@v0.2.0"
 ```
 
 Or, for a single-file `uv run --script` driver:
@@ -54,7 +54,7 @@ Or, for a single-file `uv run --script` driver:
 # /// script
 # requires-python = ">=3.13,<3.14"
 # dependencies = [
-#     "burnkit @ git+https://github.com/pythoninthegrass/burnkit@v0.1.0",
+#     "burnkit @ git+https://github.com/pythoninthegrass/burnkit@v0.2.0",
 # ]
 # ///
 ```
@@ -72,7 +72,7 @@ finished run can be audited rather than trusted. Install the extra for the
 `raw`/`search` subcommands, which evaluate user-supplied jq filters:
 
 ```bash
-uv tool install "burnkit[forensics] @ git+https://github.com/pythoninthegrass/burnkit@v0.1.0"
+uv tool install "burnkit[forensics] @ git+https://github.com/pythoninthegrass/burnkit@v0.2.0"
 burn-dsh-log session.jsonl.zstd types
 ```
 

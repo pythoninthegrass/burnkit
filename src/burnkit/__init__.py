@@ -31,7 +31,7 @@ from burnkit.gates import (
     Verdict,
     verify,
 )
-from burnkit.integration import FastForwardBranch, PullRequestPerTask
+from burnkit.integration import FastForwardBranch, PullRequestPerTask, default_integration
 from burnkit.state import BurnLayout
 
 __all__ = [
@@ -50,6 +50,7 @@ __all__ = [
     "Verdict",
     "base_ref",
     "copy_prepare",
+    "default_integration",
     "dsh_backend",
     "hermes_backend",
     "iter_events",
