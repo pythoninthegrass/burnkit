@@ -10,6 +10,7 @@ a boundary that only applies to a remote one.
 """
 
 import dataclasses
+import json
 import pytest
 from burnkit.backend import (
     DSH_CMD,
@@ -303,3 +304,32 @@ def test_status_and_kill_take_no_backend(backends: dict[str, Backend]) -> None:
         ns = build_arg_parser(backends, "dsh").parse_args([cmd])
         assert ns.cmd == cmd
         assert not hasattr(ns, "backend")
+
+
+class TestStallChecks:
+    """Only a backend that leaves a readable transcript can judge progress.
+    hermes does not, so it declares none rather than guessing."""
+
+    def test_dsh_declares_a_stall_check(self, config: BurnConfig) -> None:
+        assert dsh_backend(config).stall_check is not None
+
+    def test_hermes_declares_none(self, config: BurnConfig) -> None:
+        assert hermes_backend(config).stall_check is None
+
+    def test_a_run_with_no_session_log_is_not_called_stalled(self, config: BurnConfig, tmp_path: Path) -> None:
+        # Absence of evidence is not evidence of a stall: a session that has
+        # not written its log yet must not be killed for it.
+        check = dsh_backend(config, sessions_root=tmp_path).stall_check
+        assert check("WK-001", tmp_path / "never-used") is None
+
+    def test_a_looping_session_is_reported(self, config: BurnConfig, tmp_path: Path) -> None:
+        wt = tmp_path / "wt" / "WK-001"
+        d = tmp_path / "sessions" / "encoded" / "session-1"
+        d.mkdir(parents=True)
+        cycle = [f"render {p}" for p in "ABCDEFGH"]
+        events = [{"type": "session", "id": "session-1", "cwd": str(wt)}]
+        for cmd in cycle * 6:
+            events.append({"type": "tool/call", "data": {"name": "bash", "arguments": json.dumps({"command": cmd})}})
+        (d / "session.jsonl").write_text("\n".join(json.dumps(e) for e in events) + "\n")
+        check = dsh_backend(config, sessions_root=tmp_path / "sessions").stall_check
+        assert "no progress" in check("WK-001", wt)

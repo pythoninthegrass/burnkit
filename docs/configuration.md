@@ -131,9 +131,36 @@ build the two that ship; a consumer can build its own.
 | `prepare_worktree` | `(task, worktree) -> None`, run after checkout. `symlink_prepare` for read-only content, `copy_prepare` when a gate may write to it — a link would let a gate reach back into the consumer's own checkout |
 | `launch_line` | One line describing the model posture, spliced into the prompt |
 | `prompt_fragment` | This backend's prompt fragment path |
+| `stall_check` | Optional `(task, worktree) -> str \| None` — why the run looks stuck. Defaults to `None`; see [No-progress detection](#no-progress-detection) |
 
 Both shipped backends override the planner per launch, so a run demoted to its
 fallback planner mid-queue launches the very next task on the demoted one.
+
+### No-progress detection
+
+An agent can get stuck in a loop where every call succeeds: no error fires, the
+exit marker never lands, and the run burns the whole `task_timeout_s` re-running
+commands whose output cannot have changed. `stall_check` ends that attempt
+early. The reason is written to the heartbeat as phase `stall` before the
+process group is killed, and the attempt then goes through normal verification —
+which fails it for the missing marker, as an incomplete run should.
+
+`dsh_backend` supplies one: it locates the session log by matching the `cwd`
+each session records (not by re-deriving dsh's path encoding, which is not
+burnkit's to depend on), then flags a run whose last 12 tool calls are ≥75%
+repeats of calls already made. Both numbers are `dshlog.STALL_WINDOW` /
+`dshlog.STALL_THRESHOLD`, calibrated against a real looping session in which
+healthy exploration peaked at a 0.17 repeat ratio while the eight-command cycle
+it fell into passed 0.75 by call 49 of 72.
+
+Call identity ignores a free-text `description` argument: in that same session
+six byte-identical commands were relabeled "Render ..." then "Re-render ...",
+so keying on it would have missed the loop entirely.
+
+`hermes_backend` leaves it `None` — it has no transcript to judge progress from,
+and absence of evidence must not read as evidence of a stall. For the same
+reason a session log that is missing or mid-write yields `None` rather than a
+verdict.
 
 ## `MachineGate`
 

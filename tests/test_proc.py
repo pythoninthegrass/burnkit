@@ -174,3 +174,34 @@ def test_launch_forwards_nothing_it_was_not_asked_to(monkeypatch) -> None:
     assert seen["BURN_LOG"] == "/l"
     assert seen["PATH"] == "/bin"
     assert "MODEL_API_KEY" not in seen
+
+
+def test_wait_for_exit_gives_up_when_the_stall_check_trips(tmp_path: Path) -> None:
+    # Without this the driver waits out the whole task timeout -- six hours of
+    # an agent re-running commands whose output cannot have changed.
+    finished, _ = proc.wait_for_exit(
+        tmp_path / "run.log", kill_file=tmp_path / "KILL", timeout_s=60, poll_s=1, stall_check=lambda: True
+    )
+    assert finished is False
+
+
+def test_wait_for_exit_keeps_waiting_while_the_stall_check_is_clear(tmp_path: Path) -> None:
+    log = tmp_path / "run.log"
+    log.write_text(f"working\n{proc.EXIT_MARKER}\n")
+    finished, _ = proc.wait_for_exit(log, kill_file=tmp_path / "KILL", timeout_s=60, poll_s=1, stall_check=lambda: False)
+    assert finished is True
+
+
+def test_wait_for_exit_needs_no_stall_check(tmp_path: Path) -> None:
+    # Backends with no session log to read must keep working unchanged.
+    log = tmp_path / "run.log"
+    log.write_text(f"{proc.EXIT_MARKER}\n")
+    assert proc.wait_for_exit(log, kill_file=tmp_path / "KILL", timeout_s=60, poll_s=1)[0] is True
+
+
+def test_a_finished_run_is_not_second_guessed_by_the_stall_check(tmp_path: Path) -> None:
+    # An agent that loops and then finishes has finished; the exit marker wins.
+    log = tmp_path / "run.log"
+    log.write_text(f"{proc.EXIT_MARKER}\n")
+    finished, _ = proc.wait_for_exit(log, kill_file=tmp_path / "KILL", timeout_s=60, poll_s=1, stall_check=lambda: True)
+    assert finished is True

@@ -18,6 +18,7 @@ import signal
 import subprocess
 import time
 from burnkit.state import BurnLayout
+from collections.abc import Callable
 from decouple import Config, RepositoryEnv
 from pathlib import Path
 
@@ -117,15 +118,30 @@ def kill_all(layout: BurnLayout) -> None:
         subprocess.run(["herdr", "pane", "close", "driver"], check=False, capture_output=True, timeout=15)
 
 
-def wait_for_exit(log: Path, *, kill_file: Path, timeout_s: int, poll_s: int) -> tuple[bool, float]:
+def wait_for_exit(
+    log: Path,
+    *,
+    kill_file: Path,
+    timeout_s: int,
+    poll_s: int,
+    stall_check: Callable[[], bool] | None = None,
+) -> tuple[bool, float]:
     """Block until the launch wrapper appends its exit marker, the kill sentinel
-    appears, or the timeout expires. Returns (finished, elapsed_seconds)."""
+    appears, `stall_check` reports no progress, or the timeout expires. Returns
+    (finished, elapsed_seconds).
+
+    `stall_check` is optional because not every backend leaves a transcript to
+    judge progress from. It is checked after the exit marker, so a run that
+    looped and then finished still counts as finished.
+    """
     start = time.monotonic()
     while True:
         if kill_file.exists():
             return False, time.monotonic() - start
         if log.exists() and EXIT_MARKER in log.read_text(errors="replace")[-_LOG_TAIL_BYTES:]:
             return True, time.monotonic() - start
+        if stall_check is not None and stall_check():
+            return False, time.monotonic() - start
         if time.monotonic() - start >= timeout_s:
             return False, time.monotonic() - start
         time.sleep(poll_s)

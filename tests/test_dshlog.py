@@ -139,3 +139,131 @@ def test_iter_events_dispatches_on_the_zstd_suffix(tmp_path: Path, suffix: str) 
     path = tmp_path / f"session{suffix}"
     write_zstd(path, EVENTS) if suffix.endswith(".zstd") else write_jsonl(path, EVENTS)
     assert list(dshlog.iter_events(path)) == EVENTS
+
+
+class TestCallSignatures:
+    """Identity for "the agent already made this exact call".
+
+    Keyed on the arguments that change what a call does. `description` is
+    excluded deliberately: in the session that motivated this, six commands
+    that repeated byte-for-byte were relabeled "Render ..." then "Re-render
+    ...", so a signature including it would miss exactly the loop it exists to
+    catch.
+    """
+
+    def test_the_same_call_has_the_same_signature(self) -> None:
+        a = dshlog.call_signature("bash", '{"command": "ls", "description": "look"}')
+        b = dshlog.call_signature("bash", '{"command": "ls", "description": "look"}')
+        assert a == b
+
+    def test_a_relabeled_repeat_is_still_the_same_call(self) -> None:
+        a = dshlog.call_signature("bash", '{"command": "render A", "description": "Render A"}')
+        b = dshlog.call_signature("bash", '{"command": "render A", "description": "Re-render A"}')
+        assert a == b
+
+    def test_key_order_does_not_change_the_signature(self) -> None:
+        a = dshlog.call_signature("bash", '{"command": "ls", "timeout": 5}')
+        b = dshlog.call_signature("bash", '{"timeout": 5, "command": "ls"}')
+        assert a == b
+
+    def test_a_different_command_is_a_different_call(self) -> None:
+        a = dshlog.call_signature("bash", '{"command": "render A"}')
+        b = dshlog.call_signature("bash", '{"command": "render B"}')
+        assert a != b
+
+    def test_the_same_arguments_to_a_different_tool_differ(self) -> None:
+        a = dshlog.call_signature("bash", '{"path": "x"}')
+        b = dshlog.call_signature("read", '{"path": "x"}')
+        assert a != b
+
+    def test_unparseable_arguments_fall_back_to_the_raw_text(self) -> None:
+        # A truncated log line must not crash the poll loop that reads it.
+        assert dshlog.call_signature("bash", '{"command": "ls"') == dshlog.call_signature("bash", '{"command": "ls"')
+
+    def test_signatures_come_from_tool_calls_only(self, tmp_path: Path) -> None:
+        log = write_jsonl(
+            tmp_path / "s.jsonl",
+            [
+                {"type": "user/message", "data": {"turn": 1}},
+                {"type": "tool/call", "data": {"name": "bash", "arguments": '{"command": "ls"}'}},
+                {"type": "tool/result", "data": {"turn": 1}},
+            ],
+        )
+        assert list(dshlog.tool_call_signatures(log)) == [dshlog.call_signature("bash", '{"command": "ls"}')]
+
+
+class TestStallDetection:
+    """Thresholds are calibrated against the real 72-call session this came
+    from: healthy exploration peaked at a 0.17 repeat ratio, while the eight-
+    command cycle it fell into drove the ratio past 0.75 by call 49."""
+
+    def test_distinct_calls_never_stall(self) -> None:
+        assert dshlog.stall_reason([f"call-{i}" for i in range(40)]) is None
+
+    def test_a_short_run_is_never_judged(self) -> None:
+        # Fewer calls than the window is not evidence of anything.
+        assert dshlog.stall_reason(["a", "b", "a", "b"]) is None
+
+    def test_a_fixed_cycle_is_reported(self) -> None:
+        cycle = [f"call-{i}" for i in range(8)]
+        assert dshlog.stall_reason(cycle * 6) is not None
+
+    def test_the_reason_names_the_evidence(self) -> None:
+        cycle = [f"call-{i}" for i in range(8)]
+        reason = dshlog.stall_reason(cycle * 6)
+        assert "12" in reason and "repeat" in reason.lower()
+
+    def test_occasional_rechecks_do_not_trip_it(self) -> None:
+        # Re-running one command every few calls is normal work, not a loop.
+        sigs = []
+        for i in range(40):
+            sigs.append("recheck" if i % 4 == 0 else f"call-{i}")
+        assert dshlog.stall_reason(sigs) is None
+
+    def test_progress_after_a_cycle_clears_it(self) -> None:
+        # Only the trailing window counts, so an agent that breaks out is not
+        # punished for the loop it already escaped.
+        cycle = [f"call-{i}" for i in range(8)] * 6
+        assert dshlog.stall_reason(cycle + [f"new-{i}" for i in range(12)]) is None
+
+
+class TestFindingASessionLog:
+    """The path under ~/.dsh/sessions encodes the agent's cwd, but that encoding
+    belongs to dsh, not here. Matching on the `cwd` the session event records
+    means a change to the encoding cannot silently stop finding logs."""
+
+    def _session(self, root: Path, name: str, cwd: str, events: list[dict] | None = None) -> Path:
+        d = root / name / "session-1"
+        d.mkdir(parents=True)
+        head = {"type": "session", "id": "session-1", "cwd": cwd}
+        return write_jsonl(d / "session.jsonl", [head] + (events or []))
+
+    def test_it_matches_the_recorded_cwd_not_the_directory_name(self, tmp_path: Path) -> None:
+        wanted = self._session(tmp_path, "encoded-in-some-other-way", "/work/wt/WK-001")
+        self._session(tmp_path, "--work-wt-WK-002--", "/work/wt/WK-002")
+        found = dshlog.find_session_log(Path("/work/wt/WK-001"), sessions_root=tmp_path)
+        assert found == wanted
+
+    def test_an_unknown_cwd_finds_nothing(self, tmp_path: Path) -> None:
+        self._session(tmp_path, "a", "/work/wt/WK-002")
+        assert dshlog.find_session_log(Path("/work/wt/WK-001"), sessions_root=tmp_path) is None
+
+    def test_a_missing_sessions_root_is_not_an_error(self, tmp_path: Path) -> None:
+        assert dshlog.find_session_log(Path("/work/wt"), sessions_root=tmp_path / "absent") is None
+
+    def test_the_newest_session_for_a_cwd_wins(self, tmp_path: Path) -> None:
+        # A retried task reuses its worktree, so several sessions can share a cwd.
+        old = self._session(tmp_path, "old", "/work/wt/WK-001")
+        new = self._session(tmp_path, "new", "/work/wt/WK-001")
+        import os
+
+        os.utime(old, (1, 1))
+        os.utime(new, (2, 2))
+        assert dshlog.find_session_log(Path("/work/wt/WK-001"), sessions_root=tmp_path) == new
+
+    def test_an_unreadable_candidate_is_skipped_not_fatal(self, tmp_path: Path) -> None:
+        # A session still being written can be truncated mid-record.
+        (tmp_path / "broken" / "session-1").mkdir(parents=True)
+        (tmp_path / "broken" / "session-1" / "session.jsonl").write_text("{not json")
+        wanted = self._session(tmp_path, "good", "/work/wt/WK-001")
+        assert dshlog.find_session_log(Path("/work/wt/WK-001"), sessions_root=tmp_path) == wanted

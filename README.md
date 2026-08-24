@@ -24,6 +24,9 @@ kill unrelated sessions on the same box.
 - **Proof-of-done gates** — machine gates, acceptance-criteria enforcement, a
   diff-scope gate, and trust-class labeling that refuses to let an agent mint
   its own evidence.
+- **No-progress detection** — an agent looping on calls that all *succeed*
+  trips no error and would otherwise burn the full task timeout. For backends
+  that leave a transcript, the run is ended early and the reason recorded.
 
 ## What the consumer owns
 

@@ -17,6 +17,7 @@ from burnkit.integration import default_integration, retire_branch
 from burnkit.proc import git, kill_all, kill_task_processes, launch, launch_env, wait_for_exit
 from burnkit.queue import branch_name, is_phase_parent, load_tasks, next_ready, task_md
 from burnkit.state import bump_attempts, load_attempts, mark_handled, now, read_fallback_planner, record_fallback_planner
+from collections.abc import Callable
 from pathlib import Path
 
 EXIT_KILLED = 1
@@ -70,6 +71,26 @@ def ensure_mirror(config: BurnConfig) -> None:
         git("worktree", "add", "--detach", str(mirror), ref, cwd=config.repo, check=False)
     else:
         git("checkout", "--detach", ref, cwd=mirror, check=False)
+
+
+def stall_watch(backend: Backend, task: str, wt: Path) -> tuple[Callable[[], bool] | None, list[str]]:
+    """A `wait_for_exit` stall_check for this backend, plus the list it records
+    its reason into.
+
+    None rather than a no-op callable when the backend cannot judge progress, so
+    `wait_for_exit` keeps its original behavior instead of polling for nothing.
+    """
+    reasons: list[str] = []
+    if backend.stall_check is None:
+        return None, reasons
+
+    def check() -> bool:
+        if (reason := backend.stall_check(task, wt)) is None:
+            return False
+        reasons.append(reason)
+        return True
+
+    return check, reasons
 
 
 def _remove_worktree(repo: Path, wt: Path) -> None:
@@ -138,8 +159,19 @@ def cmd_run(
             env,
             forward=tuple(config.launch_secrets),
         )
-        finished, elapsed = wait_for_exit(log, kill_file=layout.kill_file, timeout_s=config.task_timeout_s, poll_s=config.poll_s)
+        stall_check, stall_reasons = stall_watch(backend, task, wt)
+        finished, elapsed = wait_for_exit(
+            log,
+            kill_file=layout.kill_file,
+            timeout_s=config.task_timeout_s,
+            poll_s=config.poll_s,
+            stall_check=stall_check,
+        )
         if not finished:
+            # Recorded before the kill so a triaging human sees why the attempt
+            # ended early rather than inferring it from a missing marker.
+            if stall_reasons:
+                layout.write_heartbeat(task, attempt, "stall", stall_reasons[0])
             kill_task_processes(layout, task)
 
         verdict = verify(config, task, wt, log, base_sha, env=env)

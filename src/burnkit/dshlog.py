@@ -74,6 +74,94 @@ def limited(iterable: Iterable[Any], limit: int | None) -> Iterator[Any]:
         count += 1
 
 
+_NARRATION_KEYS = frozenset({"description"})
+
+STALL_WINDOW = 12
+STALL_THRESHOLD = 0.75
+
+
+def call_signature(name: str, arguments: Any) -> str:
+    """Identity for "the agent already made this exact call".
+
+    Keyed on the arguments that change what the call does. A free-text
+    `description` is excluded: in the session this was built from, six commands
+    that repeated byte-for-byte were relabeled "Render ..." then "Re-render
+    ...", so including it would miss the very loop this is meant to catch.
+    """
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except (TypeError, ValueError):
+            return f"{name}\n{arguments}"  # truncated log line; raw text is still stable
+    if isinstance(arguments, dict):
+        arguments = {k: v for k, v in arguments.items() if k not in _NARRATION_KEYS}
+    return f"{name}\n{json.dumps(arguments, sort_keys=True, default=str)}"
+
+
+def tool_call_signatures(path: Path) -> Iterator[str]:
+    """Stream one signature per tool/call event in a session log."""
+    for event in iter_events(path):
+        if not isinstance(event, dict) or event.get("type") != "tool/call":
+            continue
+        data = event.get("data") or {}
+        yield call_signature(data.get("name", ""), data.get("arguments"))
+
+
+SESSIONS_ROOT = Path.home() / ".dsh" / "sessions"
+
+
+def find_session_log(cwd: Path, *, sessions_root: Path = SESSIONS_ROOT) -> Path | None:
+    """The newest session log written by an agent running in `cwd`, if any.
+
+    Matched on the `cwd` the session event records rather than on the directory
+    name. The name is dsh's path-encoding of that same cwd, so reading it back
+    would couple this to an encoding that is not ours to depend on.
+    """
+    if not sessions_root.is_dir():
+        return None
+    candidates = [p for pat in ("*/*/session.jsonl", "*/*/session.jsonl.zstd") for p in sessions_root.glob(pat)]
+    for path in sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            head = next(iter_events(path), None)
+        except (OSError, ValueError, zstandard.ZstdError):
+            continue  # truncated or still being written; not this run's problem
+        if isinstance(head, dict) and head.get("cwd") == str(cwd):
+            return path
+    return None
+
+
+def stall_reason(
+    signatures: Iterable[str],
+    *,
+    window: int = STALL_WINDOW,
+    threshold: float = STALL_THRESHOLD,
+) -> str | None:
+    """Why the run looks stuck, or None if it still looks like work.
+
+    A run is stuck when its most recent `window` calls are almost all repeats of
+    calls already made: the outputs cannot have changed, so nothing new is
+    reaching the agent. Only the trailing window counts, so an agent that breaks
+    out of a cycle is not held to the cycle it escaped.
+
+    Defaults are calibrated against the 72-call session this came from -- healthy
+    exploration there peaked at a 0.17 repeat ratio, while the eight-command
+    cycle it fell into passed 0.75 by call 49.
+    """
+    sigs = list(signatures)
+    if len(sigs) < window:
+        return None
+    seen = set(sigs[:-window])
+    repeats = 0
+    for sig in sigs[-window:]:
+        if sig in seen:
+            repeats += 1
+        seen.add(sig)
+    ratio = repeats / window
+    if ratio < threshold:
+        return None
+    return f"no progress: {repeats} of the last {window} tool calls repeat an earlier call ({ratio:.0%})"
+
+
 def _apply_each(program, events: Iterable[Any]) -> Iterator[Any]:
     for event in events:
         yield from program.input_value(event).all()

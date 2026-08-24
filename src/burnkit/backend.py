@@ -14,6 +14,8 @@ import shutil
 import subprocess
 import time
 import urllib.request
+import zstandard
+from burnkit import dshlog
 from burnkit.config import BurnConfig
 from burnkit.proc import EXIT_MARKER
 from burnkit.state import read_fallback_planner
@@ -49,6 +51,9 @@ class Backend:
     prepare_worktree: Callable[[str, Path], None]
     launch_line: str
     prompt_fragment: Path
+    # Given (task, worktree), why the run looks stuck, or None. Optional because
+    # only a backend that leaves a readable transcript can answer it.
+    stall_check: Callable[[str, Path], str | None] | None = None
 
 
 def _noop_prepare(task: str, wt: Path) -> None:
@@ -144,7 +149,20 @@ def dsh_backend(
     *,
     prepare_worktree: Callable[[str, Path], None] | None = None,
     launch_line: str | None = None,
+    sessions_root: Path = dshlog.SESSIONS_ROOT,
 ) -> Backend:
+    def stall_check(task: str, wt: Path) -> str | None:
+        """dsh writes a full transcript, so progress can be judged from what the
+        agent actually ran. An absent or unreadable session log yields None:
+        not-yet-written is not evidence of a stall."""
+        log = dshlog.find_session_log(wt, sessions_root=sessions_root)
+        if log is None:
+            return None
+        try:
+            return dshlog.stall_reason(dshlog.tool_call_signatures(log))
+        except (OSError, ValueError, zstandard.ZstdError):
+            return None  # mid-write truncation; the next poll reads a whole record
+
     def task_env(task: str, prompt_file: Path, log: Path) -> dict[str, str]:
         return {
             "BURN_PROMPT": str(prompt_file),
@@ -167,6 +185,7 @@ def dsh_backend(
         prepare_worktree=prepare_worktree or _noop_prepare,
         launch_line=launch_line or default_line,
         prompt_fragment=config.backend_fragment("dsh"),
+        stall_check=stall_check,
     )
 
 
