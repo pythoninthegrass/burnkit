@@ -51,9 +51,10 @@ class Backend:
     prepare_worktree: Callable[[str, Path], None]
     launch_line: str
     prompt_fragment: Path
-    # Given (task, worktree), why the run looks stuck, or None. Optional because
-    # only a backend that leaves a readable transcript can answer it.
-    stall_check: Callable[[str, Path], str | None] | None = None
+    # Given (task, worktree, attempt launch time), why the run looks stuck, or
+    # None. Optional because only a backend that leaves a readable transcript
+    # can answer it.
+    stall_check: Callable[[str, Path, float], str | None] | None = None
 
 
 def _noop_prepare(task: str, wt: Path) -> None:
@@ -151,11 +152,11 @@ def dsh_backend(
     launch_line: str | None = None,
     sessions_root: Path = dshlog.SESSIONS_ROOT,
 ) -> Backend:
-    def stall_check(task: str, wt: Path) -> str | None:
+    def stall_check(task: str, wt: Path, since: float) -> str | None:
         """dsh writes a full transcript, so progress can be judged from what the
         agent actually ran. An absent or unreadable session log yields None:
         not-yet-written is not evidence of a stall."""
-        log = dshlog.find_session_log(wt, sessions_root=sessions_root)
+        log = dshlog.find_session_log(wt, sessions_root=sessions_root, since=since)
         if log is None:
             return None
         try:

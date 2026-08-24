@@ -43,22 +43,22 @@ class TestStallWatch:
 
     def test_a_backend_without_a_stall_check_disables_the_hook(self, tmp_path: Path) -> None:
         # None, not a no-op callable: wait_for_exit must keep its old behavior.
-        check, reasons = cli.stall_watch(self._backend(None), "WK-001", tmp_path)
+        check, reasons = cli.stall_watch(self._backend(None), "WK-001", tmp_path, 0.0)
         assert check is None
         assert reasons == []
 
     def test_a_clear_run_reports_no_stall(self, tmp_path: Path) -> None:
-        check, reasons = cli.stall_watch(self._backend(lambda t, wt: None), "WK-001", tmp_path)
+        check, reasons = cli.stall_watch(self._backend(lambda t, wt, since: None), "WK-001", tmp_path, 0.0)
         assert check() is False
         assert reasons == []
 
     def test_a_stalled_run_trips_and_records_why(self, tmp_path: Path) -> None:
-        check, reasons = cli.stall_watch(self._backend(lambda t, wt: "no progress: looping"), "WK-001", tmp_path)
+        check, reasons = cli.stall_watch(self._backend(lambda t, wt, since: "no progress: looping"), "WK-001", tmp_path, 0.0)
         assert check() is True
         assert reasons == ["no progress: looping"]
 
-    def test_the_check_is_asked_about_this_task_and_worktree(self, tmp_path: Path) -> None:
+    def test_the_check_is_asked_about_this_task_worktree_and_launch_time(self, tmp_path: Path) -> None:
         seen = []
-        check, _ = cli.stall_watch(self._backend(lambda t, wt: seen.append((t, wt))), "WK-001", tmp_path)
+        check, _ = cli.stall_watch(self._backend(lambda t, wt, since: seen.append((t, wt, since))), "WK-001", tmp_path, 123.0)
         check()
-        assert seen == [("WK-001", tmp_path)]
+        assert seen == [("WK-001", tmp_path, 123.0)]

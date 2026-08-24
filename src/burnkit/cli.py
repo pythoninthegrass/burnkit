@@ -9,6 +9,7 @@ import argparse
 import os
 import subprocess
 import sys
+import time
 from burnkit import prompt
 from burnkit.backend import Backend, dsh_backend, hermes_backend, preflight_hooks_for, resolve_backend
 from burnkit.config import BurnConfig, base_ref
@@ -73,19 +74,21 @@ def ensure_mirror(config: BurnConfig) -> None:
         git("checkout", "--detach", ref, cwd=mirror, check=False)
 
 
-def stall_watch(backend: Backend, task: str, wt: Path) -> tuple[Callable[[], bool] | None, list[str]]:
+def stall_watch(backend: Backend, task: str, wt: Path, since: float) -> tuple[Callable[[], bool] | None, list[str]]:
     """A `wait_for_exit` stall_check for this backend, plus the list it records
     its reason into.
 
     None rather than a no-op callable when the backend cannot judge progress, so
     `wait_for_exit` keeps its original behavior instead of polling for nothing.
+    `since` is this attempt's launch time, so a leftover transcript from a prior
+    attempt in the same worktree path is never mistaken for this attempt's own.
     """
     reasons: list[str] = []
     if backend.stall_check is None:
         return None, reasons
 
     def check() -> bool:
-        if (reason := backend.stall_check(task, wt)) is None:
+        if (reason := backend.stall_check(task, wt, since)) is None:
             return False
         reasons.append(reason)
         return True
@@ -151,6 +154,7 @@ def cmd_run(
             return EXIT_PREFLIGHT_HOOK
 
         layout.write_heartbeat(task, attempt, "start", f"backend={backend.name} branch={branch}")
+        launch_time = time.time()
         launch(
             task,
             wt,
@@ -159,7 +163,7 @@ def cmd_run(
             env,
             forward=tuple(config.launch_secrets),
         )
-        stall_check, stall_reasons = stall_watch(backend, task, wt)
+        stall_check, stall_reasons = stall_watch(backend, task, wt, launch_time)
         finished, elapsed = wait_for_exit(
             log,
             kill_file=layout.kill_file,

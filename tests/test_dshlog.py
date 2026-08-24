@@ -232,10 +232,12 @@ class TestFindingASessionLog:
     belongs to dsh, not here. Matching on the `cwd` the session event records
     means a change to the encoding cannot silently stop finding logs."""
 
-    def _session(self, root: Path, name: str, cwd: str, events: list[dict] | None = None) -> Path:
+    def _session(self, root: Path, name: str, cwd: str, events: list[dict] | None = None, created_at: int | None = None) -> Path:
         d = root / name / "session-1"
         d.mkdir(parents=True)
         head = {"type": "session", "id": "session-1", "cwd": cwd}
+        if created_at is not None:
+            head["createdAt"] = created_at
         return write_jsonl(d / "session.jsonl", [head] + (events or []))
 
     def test_it_matches_the_recorded_cwd_not_the_directory_name(self, tmp_path: Path) -> None:
@@ -267,3 +269,32 @@ class TestFindingASessionLog:
         (tmp_path / "broken" / "session-1" / "session.jsonl").write_text("{not json")
         wanted = self._session(tmp_path, "good", "/work/wt/WK-001")
         assert dshlog.find_session_log(Path("/work/wt/WK-001"), sessions_root=tmp_path) == wanted
+
+    def test_since_excludes_a_prior_attempts_leftover_log(self, tmp_path: Path) -> None:
+        # A retried task reuses its worktree path. The prior attempt's log can
+        # still have the newest mtime (it was appended to right up until it was
+        # killed) even though it predates this attempt's launch -- `since` must
+        # win over mtime ordering, or a fresh attempt inherits a dead one's tail.
+        import os
+
+        stale = self._session(tmp_path, "old", "/work/wt/WK-001", created_at=1_000_000)
+        os.utime(stale, (500, 500))
+        assert dshlog.find_session_log(Path("/work/wt/WK-001"), sessions_root=tmp_path, since=2_000) is None
+
+    def test_since_still_finds_a_log_created_after_launch(self, tmp_path: Path) -> None:
+        import os
+
+        stale = self._session(tmp_path, "old", "/work/wt/WK-001", created_at=1_000_000)
+        fresh = self._session(tmp_path, "new", "/work/wt/WK-001", created_at=3_000_000)
+        os.utime(stale, (500, 500))
+        os.utime(fresh, (2, 2))
+        assert dshlog.find_session_log(Path("/work/wt/WK-001"), sessions_root=tmp_path, since=2_000) == fresh
+
+    def test_since_none_keeps_the_old_mtime_only_behavior(self, tmp_path: Path) -> None:
+        import os
+
+        old = self._session(tmp_path, "old", "/work/wt/WK-001")
+        new = self._session(tmp_path, "new", "/work/wt/WK-001")
+        os.utime(old, (1, 1))
+        os.utime(new, (2, 2))
+        assert dshlog.find_session_log(Path("/work/wt/WK-001"), sessions_root=tmp_path) == new

@@ -320,7 +320,7 @@ class TestStallChecks:
         # Absence of evidence is not evidence of a stall: a session that has
         # not written its log yet must not be killed for it.
         check = dsh_backend(config, sessions_root=tmp_path).stall_check
-        assert check("WK-001", tmp_path / "never-used") is None
+        assert check("WK-001", tmp_path / "never-used", 0.0) is None
 
     def test_a_looping_session_is_reported(self, config: BurnConfig, tmp_path: Path) -> None:
         wt = tmp_path / "wt" / "WK-001"
@@ -332,4 +332,4 @@ class TestStallChecks:
             events.append({"type": "tool/call", "data": {"name": "bash", "arguments": json.dumps({"command": cmd})}})
         (d / "session.jsonl").write_text("\n".join(json.dumps(e) for e in events) + "\n")
         check = dsh_backend(config, sessions_root=tmp_path / "sessions").stall_check
-        assert "no progress" in check("WK-001", wt)
+        assert "no progress" in check("WK-001", wt, 0.0)

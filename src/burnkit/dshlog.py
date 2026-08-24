@@ -110,12 +110,19 @@ def tool_call_signatures(path: Path) -> Iterator[str]:
 SESSIONS_ROOT = Path.home() / ".dsh" / "sessions"
 
 
-def find_session_log(cwd: Path, *, sessions_root: Path = SESSIONS_ROOT) -> Path | None:
+def find_session_log(cwd: Path, *, sessions_root: Path = SESSIONS_ROOT, since: float | None = None) -> Path | None:
     """The newest session log written by an agent running in `cwd`, if any.
 
     Matched on the `cwd` the session event records rather than on the directory
     name. The name is dsh's path-encoding of that same cwd, so reading it back
     would couple this to an encoding that is not ours to depend on.
+
+    `since` (epoch seconds) excludes logs created before the current attempt's
+    launch: a worktree path is reused across attempts, and a leftover log from
+    a prior (possibly killed) attempt is otherwise indistinguishable from this
+    attempt's own -- not yet written -- log by cwd alone. Without this, a fresh
+    attempt's first poll can inherit a previous attempt's already-stalled tail
+    and be killed at zero progress of its own.
     """
     if not sessions_root.is_dir():
         return None
@@ -125,8 +132,11 @@ def find_session_log(cwd: Path, *, sessions_root: Path = SESSIONS_ROOT) -> Path 
             head = next(iter_events(path), None)
         except (OSError, ValueError, zstandard.ZstdError):
             continue  # truncated or still being written; not this run's problem
-        if isinstance(head, dict) and head.get("cwd") == str(cwd):
-            return path
+        if not isinstance(head, dict) or head.get("cwd") != str(cwd):
+            continue
+        if since is not None and (created := head.get("createdAt")) is not None and created / 1000 < since:
+            continue  # a prior attempt's log in the same worktree path
+        return path
     return None
 
 
