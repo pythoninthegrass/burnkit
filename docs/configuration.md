@@ -76,7 +76,7 @@ Required, in positional order:
 | `model` / `provider` | `""` | The planner |
 | `builder_model` / `builder_provider` | `""` | The delegated implementer, if the agent has one |
 | `fallback_model` / `fallback_provider` | `""` | Planner to demote to after three consecutive fast failures. **Empty disables demotion** — a stale override sentinel cannot redirect a run that never opted in |
-| `lemonade_health_url` | local `/api/v0/health` | Only used by the `preflight_lemonade` helper |
+| `health_check_url` | local vLLM/llama-swap `/v1/models` | Only used by the `preflight_local_model` helper |
 | `secrets_env` | `None` | `.env` file the launch secrets are read from |
 | `dsh_env_file` | `None` | `.env` sourced inside a dsh session |
 | `default_backend` | `"dsh"` | Used when `--backend` is absent |
@@ -342,7 +342,7 @@ whatever that shim chooses. The established set:
 `BURN_SECRETS_ENV`, `BURN_DSH_ENV`, `BURN_MODEL`, `BURN_PROVIDER`,
 `BURN_ORCH_MODEL`, `BURN_ORCH_PROVIDER`, `BURN_BUILDER_MODEL`,
 `BURN_BUILDER_PROVIDER`, `BURN_FALLBACK_MODEL`, `BURN_FALLBACK_PROVIDER`,
-`BURN_LEMONADE_URL`, `BURN_TASK_TIMEOUT`, `BURN_MAX_ATTEMPTS`,
+`BURN_HEALTH_URL`, `BURN_TASK_TIMEOUT`, `BURN_MAX_ATTEMPTS`,
 `BURN_MAX_TURNS`, `BURN_BACKEND`.
 
 Note the collision: a shim reads `BURN_MODEL` to *configure* the planner, and

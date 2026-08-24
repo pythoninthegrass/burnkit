@@ -89,7 +89,7 @@ class BurnConfig:
     # provider trouble rather than task trouble. Empty disables demotion.
     fallback_model: str = ""
     fallback_provider: str = ""
-    lemonade_health_url: str = "http://127.0.0.1:13305/api/v0/health"
+    health_check_url: str = "http://127.0.0.1:61519/v1/models"
     secrets_env: Path | None = None
     dsh_env_file: Path | None = None
     default_backend: str = "dsh"

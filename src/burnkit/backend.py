@@ -188,8 +188,10 @@ def preflight_hooks_for(config: BurnConfig, backend: Backend, wt: Path) -> list[
     return offenders
 
 
-def preflight_lemonade(url: str) -> bool:
-    """Check the local model server, restarting it once before giving up."""
+def preflight_local_model(url: str, *, restart_container: str | None = None) -> bool:
+    """Check the local model server, optionally restarting a named container
+    once before giving up. Pass no restart_container for a plain reachability
+    check with no side effect."""
     for attempt in range(2):
         try:
             with urllib.request.urlopen(url, timeout=10) as r:
@@ -197,7 +199,7 @@ def preflight_lemonade(url: str) -> bool:
                     return True
         except OSError:
             pass
-        if attempt == 0:
-            subprocess.run(["docker", "restart", "lemonade-server"], check=False, timeout=120)
+        if attempt == 0 and restart_container:
+            subprocess.run(["docker", "restart", restart_container], check=False, timeout=120)
             time.sleep(90)
     return False

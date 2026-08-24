@@ -13,7 +13,7 @@ from burnkit.backend import (
     hermes_backend,
     planner,
     preflight_hooks_for,
-    preflight_lemonade,
+    preflight_local_model,
     resolve_backend,
     symlink_prepare,
 )
@@ -58,7 +58,7 @@ __all__ = [
     "main",
     "planner",
     "preflight_hooks_for",
-    "preflight_lemonade",
+    "preflight_local_model",
     "resolve_backend",
     "run_from_cli",
     "symlink_prepare",
