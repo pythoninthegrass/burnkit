@@ -22,14 +22,16 @@ def write_task(
     ordinal: int,
     status: str = "To Do",
     deps: list[str] | None = None,
+    parent: str | None = None,
     title: str = "some task",
 ) -> Path:
     d = root / rel_dir
     d.mkdir(parents=True, exist_ok=True)
     deps_yaml = "[]" if not deps else "[" + ", ".join(deps) + "]"
     f = d / f"{task_id.lower()} - {title}.md"
+    parent_line = f"parent_task_id: {parent}\n" if parent else ""
     f.write_text(
-        f"---\nid: {task_id}\ntitle: {title}\nstatus: {status}\ndependencies: {deps_yaml}\nordinal: {ordinal}\n---\n\nbody\n"
+        f"---\nid: {task_id}\ntitle: {title}\nstatus: {status}\ndependencies: {deps_yaml}\n{parent_line}ordinal: {ordinal}\n---\n\nbody\n"
     )
     return f
 
@@ -94,10 +96,28 @@ def test_only_task_not_in_the_backlog_returns_none(backlog_root: Path, config: B
 
 
 def test_phase_parents_are_not_pickable(tmp_path: Path, config: BurnConfig) -> None:
-    """A parent (WK-002) is a container for its leaves (WK-002.01); there is
-    nothing for an agent to do in it."""
+    """A parent (WK-002) is a container for its leaf (WK-002.01) -- there is
+    nothing for an agent to do in the parent itself, but the leaf is fine."""
     write_task(tmp_path, config.tasks_dir, "WK-002", ordinal=1)
-    assert next_ready(config, tmp_path) is None
+    write_task(tmp_path, config.tasks_dir, "WK-002.01", ordinal=2)
+    assert next_ready(config, tmp_path, only_task="WK-002") is None
+    assert next_ready(config, tmp_path) == "WK-002.01"
+
+
+def test_parent_task_id_field_also_marks_a_phase_parent(tmp_path: Path, config: BurnConfig) -> None:
+    """A consumer might not use the phase.subtask id convention at all and
+    rely purely on the parent_task_id frontmatter field instead."""
+    write_task(tmp_path, config.tasks_dir, "PROJ-1", ordinal=1)
+    write_task(tmp_path, config.tasks_dir, "PROJ-2", ordinal=2, parent="PROJ-1")
+    assert next_ready(config, tmp_path, only_task="PROJ-1") is None
+    assert next_ready(config, tmp_path) == "PROJ-2"
+
+
+def test_a_flat_dotless_task_with_no_children_is_pickable(tmp_path: Path, config: BurnConfig) -> None:
+    """Not every consumer uses the phase.subtask id scheme -- a dot-less id
+    with no children (a flat, single-level backlog) is a real leaf task."""
+    write_task(tmp_path, config.tasks_dir, "WK-010", ordinal=1)
+    assert next_ready(config, tmp_path) == "WK-010"
 
 
 def test_skip_listed_tasks_are_never_picked(tmp_path: Path, config: BurnConfig) -> None:

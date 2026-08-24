@@ -15,7 +15,7 @@ from burnkit.config import BurnConfig, base_ref
 from burnkit.gates import verify
 from burnkit.integration import default_integration, retire_branch
 from burnkit.proc import git, kill_all, kill_task_processes, launch, launch_env, wait_for_exit
-from burnkit.queue import branch_name, load_tasks, next_ready, task_md
+from burnkit.queue import branch_name, is_phase_parent, load_tasks, next_ready, task_md
 from burnkit.state import bump_attempts, load_attempts, mark_handled, now, read_fallback_planner, record_fallback_planner
 from pathlib import Path
 
@@ -224,8 +224,9 @@ def cmd_status(config: BurnConfig) -> int:
     layout = config.layout
     ensure_mirror(config)
     counts: dict[str, int] = {}
-    for t in load_tasks(layout.mirror, config.tasks_dir, config.dep_dirs).values():
-        if "." not in t.id:
+    tasks = load_tasks(layout.mirror, config.tasks_dir, config.dep_dirs)
+    for t in tasks.values():
+        if is_phase_parent(tasks, t.id):
             continue  # phase parents don't count toward leaf progress
         counts[t.status] = counts.get(t.status, 0) + 1
     print("backlog:", " ".join(f"{k}={v}" for k, v in sorted(counts.items())))

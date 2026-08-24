@@ -54,6 +54,19 @@ def load_tasks(repo: Path, tasks_dir: str, dep_dirs: tuple[str, ...]) -> dict[st
     return tasks
 
 
+def is_phase_parent(tasks: dict[str, Task], task_id: str) -> bool:
+    """True if some other loaded task is a child of `task_id` -- via its own
+    `parent_task_id` frontmatter field, or (the phase.subtask id convention,
+    e.g. WK-002 / WK-002.01) a dotted id prefixed with `task_id`.
+
+    A consumer whose backlog has no phase hierarchy at all (every task a flat,
+    dot-less leaf with no children either way) never matches this, so its
+    tasks remain pickable -- phase-parent exclusion is about having children,
+    not about id shape.
+    """
+    return any(t.id != task_id and (t.parent_task_id == task_id or t.id.startswith(f"{task_id}.")) for t in tasks.values())
+
+
 def next_ready(config: BurnConfig, repo: Path, only_task: str | None = None) -> str | None:
     """Pick the next ready leaf task, or — with `only_task` — check whether one
     specific task is ready and return it if so.
@@ -67,7 +80,7 @@ def next_ready(config: BurnConfig, repo: Path, only_task: str | None = None) -> 
     ready = [
         t
         for t in tasks.values()
-        if "." in t.id  # a leaf task, not a phase parent
+        if not is_phase_parent(tasks, t.id)
         and t.id not in config.skip_list
         and t.id not in handled
         and attempts.get(t.id, 0) < config.max_attempts  # exhausted its budget in a prior run
