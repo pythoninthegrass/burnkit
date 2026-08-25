@@ -282,6 +282,13 @@ survives `git branch -D` and that is not enough to recover it before the next
 from whatever was published, so a rescue ref would only accumulate one dead
 branch per success.
 
+`kill` SIGKILLs the driver mid-loop, so that retirement never runs for the
+task it interrupted. `resume` therefore reclaims first: every worktree git
+still has registered under `config.layout.worktrees` is removed and its branch
+retired against its own fork point, so the branch is free for `run` to cut
+again and any commits the killed attempt made land on a rescue ref. Worktrees
+elsewhere in the repo are the consumer's own and are left alone.
+
 ## Marker protocol
 
 The prose the agent reads and the parser that scans its log are generated from

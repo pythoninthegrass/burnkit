@@ -100,6 +100,44 @@ def _remove_worktree(repo: Path, wt: Path) -> None:
     subprocess.run(["git", "worktree", "remove", "--force", str(wt)], cwd=repo, check=False, capture_output=True)
 
 
+def _registered_worktrees(repo: Path, under: Path) -> list[tuple[Path, str]]:
+    """(path, branch) for every worktree git knows about below `under`.
+
+    Read from git rather than globbing the directory: the directory can already
+    be gone while the registration and the branch survive, and the names are
+    the consumer's task ids, whose case burnkit does not get to assume.
+    """
+    found: list[tuple[Path, str]] = []
+    path: Path | None = None
+    for line in git("worktree", "list", "--porcelain", cwd=repo, check=False).stdout.splitlines():
+        if line.startswith("worktree "):
+            path = Path(line.removeprefix("worktree "))
+        elif line.startswith("branch ") and path is not None:
+            if path.is_relative_to(under):
+                found.append((path, line.removeprefix("branch ").removeprefix("refs/heads/")))
+            path = None
+    return found
+
+
+def reclaim_worktrees(repo: Path, worktrees: Path, base: str, attempts: dict[str, int]) -> None:
+    """Clear the worktrees and attempt branches a killed run left behind.
+
+    `kill` SIGKILLs the driver mid-loop, so the loop tail that retires the
+    attempt branch never runs -- and `git worktree add -b` refuses to recreate
+    an existing branch, which stopped `resume` dead on the very task the kill
+    interrupted. Retiring each leftover the way a finished attempt would keeps
+    any commits it managed to make, on a rescue ref.
+    """
+    for wt, branch in _registered_worktrees(repo, worktrees):
+        _remove_worktree(repo, wt)
+        # The branch's own fork point, not the current tip: base may have moved
+        # on since the attempt was cut, and every such branch would then look
+        # like it carried work and earn a rescue ref pointing into base.
+        fork = git("merge-base", base, branch, cwd=repo, check=False).stdout.strip()
+        retire_branch(repo, branch, fork, wt.name, attempts.get(wt.name, 0))
+    subprocess.run(["git", "worktree", "prune"], cwd=repo, check=False)
+
+
 def cmd_run(
     config: BurnConfig,
     backend: Backend,
@@ -249,10 +287,7 @@ def cmd_kill(config: BurnConfig) -> int:
 def cmd_resume(config: BurnConfig, backend: Backend, integration) -> int:
     layout = config.layout
     layout.kill_file.unlink(missing_ok=True)
-    subprocess.run(["git", "worktree", "prune"], cwd=config.repo, check=False)
-    if layout.worktrees.exists():
-        for wt in sorted(layout.worktrees.glob(f"{config.task_id_prefix}-*")):
-            _remove_worktree(config.repo, wt)
+    reclaim_worktrees(config.repo, layout.worktrees, base_ref(config), load_attempts(layout))
     return cmd_run(config, backend, integration)
 
 
