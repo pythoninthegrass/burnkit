@@ -186,6 +186,44 @@ def test_a_green_code_task_is_measured_local(config: BurnConfig, wt: Path, base_
     assert verdict.report.ok
 
 
+def test_a_code_task_whose_only_gates_are_vacuous_falls_back_to_attested(
+    config: BurnConfig, wt: Path, base_sha: str, tmp_path: Path
+) -> None:
+    """The gates ran and exited 0 having checked nothing. That is not a
+    failure -- the work may be fine -- but it is not measured evidence either,
+    so it must land in the review queue flagged for a human."""
+    gates = tuple(dataclasses.replace(g, vacuous_if=lambda out: "nothing to verify" in out) for g in config.machine_gates)
+    config = dataclasses.replace(config, machine_gates=gates)
+    write_task_file(wt, config)
+    commit(wt, "src/clamp.c")
+    verdict = verify_it(
+        config,
+        wt,
+        log_with(tmp_path, prompt.done_marker(TASK)),
+        base_sha,
+        run=lambda cmd, cwd, env=None, **_: FakeProc(0, "nothing to verify yet"),
+    )
+    assert verdict.ok
+    assert verdict.trust == TRUST_AGENT_ATTESTED
+    assert "no machine evidence" in verdict.reason
+
+
+def test_a_vacuous_gate_never_rescues_a_failing_one(config: BurnConfig, wt: Path, base_sha: str, tmp_path: Path) -> None:
+    gates = tuple(dataclasses.replace(g, vacuous_if=lambda out: "nothing to verify" in out) for g in config.machine_gates)
+    config = dataclasses.replace(config, machine_gates=gates)
+    write_task_file(wt, config)
+    commit(wt, "src/clamp.c")
+    verdict = verify_it(
+        config,
+        wt,
+        log_with(tmp_path, prompt.done_marker(TASK)),
+        base_sha,
+        run=lambda cmd, cwd, env=None, **_: FakeProc(1, "nothing to verify yet"),
+    )
+    assert not verdict.ok
+    assert verdict.trust == TRUST_MEASURED_LOCAL
+
+
 def test_a_prose_task_never_runs_a_machine_gate(config: BurnConfig, wt: Path, base_sha: str, tmp_path: Path) -> None:
     write_task_file(wt, config)
     commit(wt, "docs/notes.md")

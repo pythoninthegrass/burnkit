@@ -31,12 +31,19 @@ class MachineGate:
     duration is far from that: a lint pass and a full replay run cannot share
     one ceiling without either killing the slow gate or letting a hung fast one
     hold the whole queue.
+
+    `vacuous_if` recognises this gate's own "nothing to check" output. A suite
+    that is empty -- no specs written yet, no sources matching its glob --
+    exits 0 having verified nothing, which burnkit would otherwise record as
+    evidence. Only the consumer knows what that looks like for their command,
+    so they declare it here; a gate that leaves it None is never vacuous.
     """
 
     name: str
     argv: tuple[str, ...]
     applies: Callable[[list[str]], bool] | None = None
     timeout_s: int | None = None
+    vacuous_if: Callable[[str], bool] | None = None
 
 
 @dataclass(frozen=True)

@@ -118,6 +118,72 @@ def test_gate_evidence_is_truncated_but_keeps_the_tail(gates: tuple[MachineGate,
     assert len(report.results[0].evidence) < 2000
 
 
+# --- vacuous gates --------------------------------------------------------
+#
+# A gate whose suite is empty exits 0 having checked nothing. That is a green
+# light for work nobody verified, so `vacuous_if` lets the consumer declare the
+# gate's own "nothing to verify" signature and burnkit stops counting it.
+
+NOTHING_TO_VERIFY = "no specs found -- nothing to verify yet, not evidence of correctness"
+VACUOUS_GATE = MachineGate(
+    name="diff-verify",
+    argv=("task", "diff-verify"),
+    vacuous_if=lambda out: "nothing to verify" in out,
+)
+
+
+def test_a_gate_reporting_nothing_to_verify_is_marked_vacuous() -> None:
+    run = recording_runner([FakeProc(0, NOTHING_TO_VERIFY)])
+    report = run_machine_gates((VACUOUS_GATE,), Path("/wt"), run=run)
+    assert report.results[0].vacuous
+
+
+def test_a_gate_that_actually_checked_something_is_not_vacuous() -> None:
+    run = recording_runner([FakeProc(0, "12 specs, 0 failures")])
+    report = run_machine_gates((VACUOUS_GATE,), Path("/wt"), run=run)
+    assert not report.results[0].vacuous
+
+
+def test_an_all_vacuous_report_is_not_a_pass() -> None:
+    """Same reasoning as the zero-gate case: nothing was checked, so there is
+    nothing to read as evidence."""
+    run = recording_runner([FakeProc(0, NOTHING_TO_VERIFY)])
+    report = run_machine_gates((VACUOUS_GATE,), Path("/wt"), run=run)
+    assert not report.ok
+    assert not report.failed
+
+
+def test_one_real_gate_carries_a_report_that_also_holds_a_vacuous_one() -> None:
+    run = recording_runner([FakeProc(0, "built"), FakeProc(0, NOTHING_TO_VERIFY)])
+    report = run_machine_gates((MachineGate(name="build", argv=("task", "build")), VACUOUS_GATE), Path("/wt"), run=run)
+    assert report.ok
+
+
+def test_a_failing_gate_is_never_vacuous() -> None:
+    """A non-zero exit is a failure even if the output matches the consumer's
+    vacuity signature -- otherwise the predicate could mask a real break."""
+    run = recording_runner([FakeProc(1, NOTHING_TO_VERIFY)])
+    report = run_machine_gates((VACUOUS_GATE,), Path("/wt"), run=run)
+    assert not report.results[0].vacuous
+    assert report.failed
+
+
+def test_evidence_summary_says_vacuous_rather_than_pass() -> None:
+    """review-queue.md is read as a record of what was verified; a vacuous gate
+    logged as `pass` makes it lie."""
+    run = recording_runner([FakeProc(0, NOTHING_TO_VERIFY)])
+    summary = run_machine_gates((VACUOUS_GATE,), Path("/wt"), run=run).evidence_summary()
+    assert "vacuous" in summary
+    assert "pass" not in summary
+
+
+def test_a_gate_without_a_vacuity_predicate_is_never_vacuous(gates: tuple[MachineGate, ...]) -> None:
+    run = recording_runner([FakeProc(0, NOTHING_TO_VERIFY), FakeProc(0, "ok")])
+    report = run_machine_gates(gates, Path("/wt"), run=run)
+    assert not any(r.vacuous for r in report.results)
+    assert report.ok
+
+
 def test_gate_env_is_threaded_to_the_runner(gates: tuple[MachineGate, ...]) -> None:
     seen: list[dict | None] = []
 

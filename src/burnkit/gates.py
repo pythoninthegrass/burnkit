@@ -42,6 +42,7 @@ class GateResult:
     name: str
     ok: bool
     evidence: str
+    vacuous: bool = False
 
 
 @dataclass
@@ -51,11 +52,26 @@ class GateReport:
     @property
     def ok(self) -> bool:
         """A zero-gate report is never a pass — that is the shape of a vacuous
-        one, and it would read as evidence in a PR body."""
-        return bool(self.results) and all(r.ok for r in self.results)
+        one, and it would read as evidence in a PR body. A report holding only
+        vacuous results has the same shape: the commands ran, but nothing was
+        checked, so there is still no evidence to read."""
+        return any(not r.vacuous for r in self.results) and all(r.ok for r in self.results)
+
+    @property
+    def failed(self) -> bool:
+        """A gate actually broke, as opposed to `not ok` because nothing was
+        checked. The two need different consequences and only this tells them
+        apart."""
+        return any(not r.ok for r in self.results)
 
     def evidence_summary(self) -> str:
-        return "; ".join(f"{r.name} {'pass' if r.ok else 'FAIL'}" for r in self.results)
+        return "; ".join(f"{r.name} {_outcome(r)}" for r in self.results)
+
+
+def _outcome(r: GateResult) -> str:
+    if not r.ok:
+        return "FAIL"
+    return "vacuous (nothing checked)" if r.vacuous else "pass"
 
 
 @dataclass
@@ -137,8 +153,13 @@ def run_machine_gates(
     report = GateReport()
     for gate in gates:
         cp = run(list(gate.argv), wt, env, timeout_s=gate.timeout_s or DEFAULT_GATE_TIMEOUT_S)
-        report.results.append(GateResult(gate.name, cp.returncode == 0, _tail((cp.stdout or "") + (cp.stderr or ""))))
-        if cp.returncode != 0:
+        output = (cp.stdout or "") + (cp.stderr or "")
+        ok = cp.returncode == 0
+        # Vacuity is only meaningful for a gate that passed; a non-zero exit is
+        # a real failure however much its output looks like an empty suite.
+        vacuous = ok and gate.vacuous_if is not None and gate.vacuous_if(output)
+        report.results.append(GateResult(gate.name, ok, _tail(output), vacuous))
+        if not ok:
             break
     return report
 
@@ -268,6 +289,16 @@ def verify(
     if violations:
         return Verdict(False, f"scope violation: {', '.join(violations)}", trust=TRUST_MEASURED_LOCAL)
     report = run_machine_gates(select_gates(config.machine_gates, changed), wt, env=env, run=run)
-    if not report.ok:
+    if report.failed:
         return Verdict(False, f"machine gate failed: {report.evidence_summary()}", report=report, trust=TRUST_MEASURED_LOCAL)
+    if not report.ok:
+        # Every gate either filtered out or checked nothing. The work may be
+        # fine, but burnkit measured none of it, so it gets a prose task's
+        # trust class and a human looks at it.
+        return Verdict(
+            True,
+            f"{commits} commits; no machine evidence: {report.evidence_summary() or 'no gate applied'}",
+            report=report,
+            trust=TRUST_AGENT_ATTESTED,
+        )
     return Verdict(True, f"{commits} commits; gates: {report.evidence_summary()}", report=report, trust=TRUST_MEASURED_LOCAL)

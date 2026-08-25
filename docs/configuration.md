@@ -165,13 +165,35 @@ verdict.
 ## `MachineGate`
 
 ```python
-MachineGate(name="test", argv=("task", "test"), applies=None, timeout_s=180)
+MachineGate(name="test", argv=("task", "test"), applies=None, timeout_s=180, vacuous_if=None)
 ```
 
 Run by burnkit in the driver, not by the agent — an agent's report of its own
 gate run is not evidence. `applies=None` means unconditional; a consumer that
 selects gates from the diff passes a predicate over the changed paths instead.
 Both styles produce the same `GateReport`.
+
+`vacuous_if` is a predicate over the gate's combined stdout+stderr that
+recognises its own "nothing to check" output. An empty suite — no specs written
+yet, no sources matching the command's glob — exits 0 having verified nothing,
+and without this burnkit records that as a pass:
+
+```python
+MachineGate(
+    name="diff-verify",
+    argv=("task", "diff-verify"),
+    vacuous_if=lambda out: "nothing to verify yet" in out,
+)
+```
+
+A vacuous result is not a failure and does not fail the task, but it does not
+count as evidence either. If every applicable gate comes back vacuous (or none
+applied), the task still publishes — with `agent_attested` trust and a `no
+machine evidence` reason, so it reaches the review queue flagged for a human
+rather than wearing a `measured_local` label nothing earned. Vacuity is only
+evaluated for a gate that exited 0; a non-zero exit is a real failure however
+much its output resembles an empty suite. A gate that leaves `vacuous_if` as
+`None` is never vacuous.
 
 `timeout_s` matters more than it looks. A lint pass and a full replay run
 cannot share one ceiling without either killing the slow gate or letting a hung
@@ -297,7 +319,10 @@ and burnkit does not touch them.
 6. *(code tasks)* every applicable machine gate green
 
 Clearing 1–4 earns `agent_attested`. Only 5–6, run and observed by burnkit,
-earn `measured_local`.
+earn `measured_local` — and step 6 only counts when a gate actually checked
+something. A code task whose gates all came back vacuous, or whose gates all
+filtered out, falls back to `agent_attested`; see
+[`vacuous_if`](#machinegate).
 
 ## Termination
 
