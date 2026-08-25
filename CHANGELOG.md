@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/pythoninthegrass/burnkit/compare/v0.5.0...v0.6.0) (2026-08-25)
+
+
+### Features
+
+* stop counting gates that verified nothing as evidence ([e7f3757](https://github.com/pythoninthegrass/burnkit/commit/e7f3757ba8d747b86980c5180e5915b40e91ecd3))
+
 ## [0.5.0](https://github.com/pythoninthegrass/burnkit/compare/v0.4.0...v0.5.0) (2026-08-25)
 
 

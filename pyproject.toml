@@ -1,6 +1,6 @@
 [project]
 name = "burnkit"
-version = "0.5.0"
+version = "0.6.0"
 description = "Shared driver for overnight headless-agent burn loops over a Backlog.md task queue"
 authors = [
     { name = "pythoninthegrass", email = "4097471+pythoninthegrass@users.noreply.github.com" }
