@@ -9,7 +9,7 @@ around them.
 import dataclasses
 import pytest
 from burnkit.config import BurnConfig
-from burnkit.queue import Task, branch_name, load_tasks, next_ready, read_frontmatter, task_md
+from burnkit.queue import Task, branch_name, fingerprint, load_tasks, next_ready, read_frontmatter, task_md
 from burnkit.state import bump_attempts, mark_handled
 from pathlib import Path
 
@@ -136,10 +136,43 @@ def test_a_handled_task_is_not_handed_back_out(tmp_path: Path, config: BurnConfi
 
 
 def test_a_task_that_exhausted_its_attempts_stays_excluded(tmp_path: Path, config: BurnConfig) -> None:
-    write_task(tmp_path, config.tasks_dir, "WK-005.01", ordinal=1)
+    f = write_task(tmp_path, config.tasks_dir, "WK-005.01", ordinal=1)
     for _ in range(config.max_attempts):
-        bump_attempts(config.layout, "WK-005.01")
+        bump_attempts(config.layout, "WK-005.01", fingerprint(f))
     assert next_ready(config, tmp_path) is None
+
+
+def test_a_revised_task_earns_a_fresh_attempt_budget(tmp_path: Path, config: BurnConfig) -> None:
+    """Exhausting the budget is a triage state, not a verdict that the task is
+    finished -- and revising the task is the gesture triage asks for. Without
+    this there is no way out of triage at all: the count only ever rises, so a
+    still-open task is tombstoned by a counter and the queue silently stops
+    offering it."""
+    f = write_task(tmp_path, config.tasks_dir, "WK-005.01", ordinal=1)
+    for _ in range(config.max_attempts):
+        bump_attempts(config.layout, "WK-005.01", fingerprint(f))
+    assert next_ready(config, tmp_path) is None
+    f.write_text(f.read_text() + "\nrewritten after triage\n")
+    assert next_ready(config, tmp_path) == "WK-005.01"
+
+
+def test_an_untouched_task_stays_excluded_however_often_the_run_restarts(tmp_path: Path, config: BurnConfig) -> None:
+    """The other half: re-reading the queue must not itself grant a budget, or
+    a supervisor relaunching in a loop retries forever."""
+    f = write_task(tmp_path, config.tasks_dir, "WK-005.01", ordinal=1)
+    for _ in range(config.max_attempts):
+        bump_attempts(config.layout, "WK-005.01", fingerprint(f))
+    for _ in range(3):
+        assert next_ready(config, tmp_path) is None
+
+
+def test_an_archived_task_is_never_handed_out(tmp_path: Path, config: BurnConfig) -> None:
+    """Archiving is terminal regardless of status. The queue used to filter on
+    status alone, so a task archived while still To Do stayed pickable -- and
+    it is only ever loaded at all so dependencies on it can resolve."""
+    write_task(tmp_path, config.dep_dirs[-1], "WK-005.02", ordinal=1, status="To Do")
+    assert next_ready(config, tmp_path) is None
+    assert next_ready(config, tmp_path, only_task="WK-005.02") is None
 
 
 def test_a_task_with_an_unfinished_dependency_is_blocked(tmp_path: Path, config: BurnConfig) -> None:

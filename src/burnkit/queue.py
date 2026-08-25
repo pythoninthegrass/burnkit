@@ -4,10 +4,11 @@ Read from a mirror checkout rather than the user's own, so an overnight run
 never touches a working tree a human might be using.
 """
 
+import hashlib
 import re
 import yaml
 from burnkit.config import BurnConfig
-from burnkit.state import load_attempts, load_handled
+from burnkit.state import Attempt, load_attempts, load_handled
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -23,6 +24,7 @@ class Task:
     parent_task_id: str | None = None
     ordinal: int = 0
     file: Path | None = None
+    archived: bool = False
 
 
 def read_frontmatter(md: Path) -> dict:
@@ -50,8 +52,34 @@ def load_tasks(repo: Path, tasks_dir: str, dep_dirs: tuple[str, ...]) -> dict[st
                 parent_task_id=fm.get("parent_task_id"),
                 ordinal=fm.get("ordinal") or 0,
                 file=f,
+                # Out of the live tasks directory: loaded only so dependencies
+                # on it resolve, never to be worked. Terminal by location, so
+                # it holds even for a task archived before it reached Done.
+                archived=rel != tasks_dir,
             )
     return tasks
+
+
+def fingerprint(md: Path | None) -> str:
+    """Identify a task by its definition, so a revision reads as a different
+    question from a retry of the same one."""
+    return "" if md is None else hashlib.sha256(md.read_bytes()).hexdigest()[:16]
+
+
+def has_budget(task: Task, attempts: dict[str, Attempt], max_attempts: int) -> bool:
+    """Whether `task` may still be handed out, given what it has already spent.
+
+    Exhausting the budget is a triage state, not a finding that the task is
+    finished — but nothing used to clear it, so a still-open task was
+    tombstoned by a counter and quietly stopped being offered. Revising the
+    task is the gesture triage asks for, and is what clears it: an attempt is
+    only spent against the definition it ran on. Merely restarting the run
+    grants nothing, which is what keeps a supervisor's relaunch loop bounded.
+    """
+    spent = attempts.get(task.id)
+    if spent is None or spent.n < max_attempts:
+        return True
+    return spent.fingerprint != fingerprint(task.file)
 
 
 def is_phase_parent(tasks: dict[str, Task], task_id: str) -> bool:
@@ -81,9 +109,10 @@ def next_ready(config: BurnConfig, repo: Path, only_task: str | None = None) -> 
         t
         for t in tasks.values()
         if not is_phase_parent(tasks, t.id)
+        and not t.archived
         and t.id not in config.skip_list
         and t.id not in handled
-        and attempts.get(t.id, 0) < config.max_attempts  # exhausted its budget in a prior run
+        and has_budget(t, attempts, config.max_attempts)
         and t.status == "To Do"
         and all(tasks.get(d, Task("", "")).status == "Done" for d in t.dependencies)
     ]

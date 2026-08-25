@@ -9,6 +9,7 @@ from burnkit.backend import Backend
 from burnkit.config import BurnConfig
 from burnkit.integration import FastForwardBranch
 from burnkit.proc import git, sh
+from burnkit.state import Attempt
 from pathlib import Path
 
 
@@ -106,7 +107,7 @@ class TestReclaimWorktrees:
         sh("git", "commit", "-q", "-am", "work", cwd=wt)
         work_sha = git("rev-parse", "HEAD", cwd=wt).stdout.strip()
 
-        cli.reclaim_worktrees(repo, worktrees, "main", {"WK-009.42": 2})
+        cli.reclaim_worktrees(repo, worktrees, "main", {"WK-009.42": Attempt(2)})
 
         assert git("rev-parse", "rescue/WK-009.42.a2", cwd=repo).stdout.strip() == work_sha
 
@@ -120,7 +121,7 @@ class TestReclaimWorktrees:
         (repo / "f.txt").write_text("base\nmoved on\n")
         sh("git", "commit", "-q", "-am", "main moved on", cwd=repo)
 
-        cli.reclaim_worktrees(repo, worktrees, "main", {"WK-009.42": 1})
+        cli.reclaim_worktrees(repo, worktrees, "main", {"WK-009.42": Attempt(1)})
 
         assert git("rev-parse", "--verify", "rescue/WK-009.42.a1", cwd=repo, check=False).returncode != 0
 

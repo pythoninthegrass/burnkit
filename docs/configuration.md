@@ -88,7 +88,7 @@ Required, in positional order:
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `task_timeout_s` | `21600` | Wall-clock ceiling for one agent session |
-| `max_attempts` | `2` | Attempts per task before it is left for triage |
+| `max_attempts` | `2` | Attempts per task before it is left for triage; revising the task clears it (see [Attempts and triage](#attempts-and-triage)) |
 | `max_turns` | `150` | Passed to the agent |
 | `fast_fail_s` | `90` | A run dying faster than this is counted separately — it suggests provider trouble, not task trouble |
 | `poll_s` | `15` | Log-polling interval while waiting for a session to exit |
@@ -343,6 +343,37 @@ This is a contract on the backend too: a `shell_cmd` that does not write `$$`
 to `$BURN_PIDFILE` leaves nothing to scope a kill to, and a name search is then
 the only option left.
 
+## Attempts and triage
+
+A task that spends `max_attempts` without publishing is left for triage: the
+queue stops offering it, `status` lists it under `blocked`, and a run that hits
+one exits `4`. That is a request for a human to look, not a finding that the
+task is finished — only `Done` and archiving are terminal.
+
+So the state has to be clearable, and the exit is **revising the task**. Each
+attempt is recorded against a fingerprint of the task file it ran on, and
+`queue.has_budget` treats a task whose definition has changed since it failed
+as a different question, with a fresh budget. Editing the task is the gesture
+triage asks for anyway, so there is no separate command to remember and no way
+to leave a still-open task tombstoned by a counter it cannot shed.
+
+Restarting the run grants nothing on its own — that is deliberate. Attempt
+counts persist across process restarts precisely so a supervisor relaunching
+after a blocked exit cannot hand out an unlimited budget one level up, and
+resetting them on startup would reintroduce exactly that. The bound is also
+what stops a single failing task from consuming a whole run: the loop re-picks
+the lowest-ordinal ready task every iteration, so without a cap a task that
+fails on turn one is picked again immediately, forever.
+
+Counts written before fingerprinting existed are bare integers. They load as an
+unknown definition, which cannot be shown to be unchanged, so they earn one
+more budget rather than a permanent tombstone — a one-time effect, and the run
+re-blocks such a task within that same run if it fails again.
+
+Archiving is terminal by location, not by status: a task file outside
+`tasks_dir` is loaded only so dependencies on it resolve, and is never handed
+out even if it was archived while still `To Do`.
+
 ## Layout
 
 `burn_dir` holds all run state, so a run survives a restart:
@@ -353,7 +384,7 @@ the only option left.
 | `status/state.log` | Append-only progress record |
 | `mirror/` | Detached worktree at the base tip, read for the queue so the consumer's own checkout is never touched |
 | `handled.txt` | Tasks this run has already taken a turn on |
-| `attempts.json` | Persisted attempt counts |
+| `attempts.json` | Persisted attempt counts, each against the fingerprint of the task definition it was spent on |
 | `review-queue.md` | One line per published task, tagged with its trust class |
 | `PLANNER_OVERRIDE` | Set when a run demotes its planner |
 | `pids/` | One pidfile per launched task |
@@ -368,7 +399,7 @@ the only option left.
 | `0` | Queue drained, or `--once` finished |
 | `1` | The `KILL` sentinel was seen |
 | `3` | `health_check` returned False |
-| `4` | A task exhausted `max_attempts` |
+| `4` | A task exhausted `max_attempts` and is left for triage |
 | `5` | A preflight hook found offenders |
 
 ## Environment variables

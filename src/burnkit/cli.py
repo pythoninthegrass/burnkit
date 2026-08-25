@@ -16,8 +16,8 @@ from burnkit.config import BurnConfig, base_ref
 from burnkit.gates import verify
 from burnkit.integration import default_integration, retire_branch
 from burnkit.proc import git, kill_all, kill_task_processes, launch, launch_env, wait_for_exit
-from burnkit.queue import branch_name, is_phase_parent, load_tasks, next_ready, task_md
-from burnkit.state import bump_attempts, load_attempts, mark_handled, now, read_fallback_planner, record_fallback_planner
+from burnkit.queue import branch_name, fingerprint, has_budget, is_phase_parent, load_tasks, next_ready, task_md
+from burnkit.state import Attempt, bump_attempts, load_attempts, mark_handled, now, read_fallback_planner, record_fallback_planner
 from collections.abc import Callable
 from pathlib import Path
 
@@ -119,7 +119,7 @@ def _registered_worktrees(repo: Path, under: Path) -> list[tuple[Path, str]]:
     return found
 
 
-def reclaim_worktrees(repo: Path, worktrees: Path, base: str, attempts: dict[str, int]) -> None:
+def reclaim_worktrees(repo: Path, worktrees: Path, base: str, attempts: dict[str, Attempt]) -> None:
     """Clear the worktrees and attempt branches a killed run left behind.
 
     `kill` SIGKILLs the driver mid-loop, so the loop tail that retires the
@@ -134,7 +134,7 @@ def reclaim_worktrees(repo: Path, worktrees: Path, base: str, attempts: dict[str
         # on since the attempt was cut, and every such branch would then look
         # like it carried work and earn a rescue ref pointing into base.
         fork = git("merge-base", base, branch, cwd=repo, check=False).stdout.strip()
-        retire_branch(repo, branch, fork, wt.name, attempts.get(wt.name, 0))
+        retire_branch(repo, branch, fork, wt.name, attempts.get(wt.name, Attempt(0)).n)
     subprocess.run(["git", "worktree", "prune"], cwd=repo, check=False)
 
 
@@ -176,7 +176,7 @@ def cmd_run(
 
         prompt_file = layout.prompts / f"{task}.txt"
         prompt_file.write_text(header + f"\n{prompt.TASK_FILE_SEPARATOR}\n" + task_md(wt, config.tasks_dir, task).read_text())
-        attempt = bump_attempts(layout, task)
+        attempt = bump_attempts(layout, task, fingerprint(t.file))
         log = layout.logs / f"{task}.a{attempt}.log"
         current = layout.logs / "current"
         current.unlink(missing_ok=True)
@@ -306,9 +306,17 @@ def cmd_status(config: BurnConfig) -> int:
     # backend.planner is: an inert sentinel must not read as an active override.
     if config.fallback_model and (override := read_fallback_planner(layout)) is not None:
         print("planner override:", "|".join(override))
-    blocked = {tid: n for tid, n in load_attempts(layout).items() if n >= config.max_attempts}
+    # Through has_budget, not the raw count: a task revised since it failed is
+    # already pickable again, and reporting it as blocked would send a human
+    # to triage work the queue has moved on from.
+    attempts = load_attempts(layout)
+    blocked = {
+        t.id: attempts[t.id].n for t in tasks.values() if t.id in attempts and not has_budget(t, attempts, config.max_attempts)
+    }
     if blocked:
-        print("blocked (exhausted attempts, needs triage):", ", ".join(f"{k}({v})" for k, v in sorted(blocked.items())))
+        print(
+            "blocked (exhausted attempts; revise the task to clear):", ", ".join(f"{k}({v})" for k, v in sorted(blocked.items()))
+        )
     print("kill sentinel:", "PRESENT" if layout.kill_file.exists() else "absent")
     if layout.heartbeat.exists():
         print("last heartbeats:")

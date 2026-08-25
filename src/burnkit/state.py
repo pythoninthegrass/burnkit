@@ -8,7 +8,7 @@ ways a real overnight run exposed — see the docstrings.
 """
 
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -129,22 +129,40 @@ def read_fallback_planner(layout: BurnLayout) -> tuple[str, str] | None:
     return (model, provider) if model and provider else None
 
 
-def load_attempts(layout: BurnLayout) -> dict[str, int]:
+@dataclass(frozen=True)
+class Attempt:
+    """What a task had spent, and the definition it spent it on.
+
+    The fingerprint is what lets the queue tell a retry of the same task from
+    a retry of a rewritten one; an empty string means the record predates
+    fingerprinting and the definition under test is unknown.
+    """
+
+    n: int
+    fingerprint: str = ""
+
+
+def load_attempts(layout: BurnLayout) -> dict[str, Attempt]:
+    """A bare int is the pre-fingerprint on-disk form and still reads."""
     if not layout.attempts.exists():
         return {}
-    return json.loads(layout.attempts.read_text())
+    raw = json.loads(layout.attempts.read_text())
+    return {tid: Attempt(v) if isinstance(v, int) else Attempt(**v) for tid, v in raw.items()}
 
 
-def bump_attempts(layout: BurnLayout, task: str) -> int:
-    """Persist the attempt count to disk *before* the attempt runs.
+def bump_attempts(layout: BurnLayout, task: str, fingerprint: str) -> int:
+    """Persist the attempt count to disk *before* the attempt runs, against the
+    fingerprint of the task definition this attempt is spent on.
 
     In-memory-only counting resets to zero on every process restart, so a human
     (or a supervisor) relaunching after a blocked exit would silently grant a
     fresh budget each time — the same unbounded-retry shape the attempt limit
-    exists to prevent, just moved one level up.
+    exists to prevent, just moved one level up. Recording the definition rather
+    than the count alone is what keeps that closed while still letting a
+    genuinely revised task out of triage; see queue.has_budget.
     """
     attempts = load_attempts(layout)
-    attempts[task] = attempts.get(task, 0) + 1
+    attempts[task] = Attempt(attempts.get(task, Attempt(0)).n + 1, fingerprint)
     layout.attempts.parent.mkdir(parents=True, exist_ok=True)
-    layout.attempts.write_text(json.dumps(attempts))
-    return attempts[task]
+    layout.attempts.write_text(json.dumps({tid: asdict(a) for tid, a in attempts.items()}))
+    return attempts[task].n

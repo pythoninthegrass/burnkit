@@ -4,6 +4,7 @@ two files that make the queue's decisions survive a process restart."""
 import json
 from burnkit.config import BurnConfig
 from burnkit.state import (
+    Attempt,
     BurnLayout,
     bump_attempts,
     load_attempts,
@@ -44,10 +45,30 @@ def test_attempts_persist_to_disk_across_calls(config: BurnConfig) -> None:
     a fresh retry budget to a task that already exhausted it."""
     layout = config.layout
     assert load_attempts(layout) == {}
-    assert bump_attempts(layout, "WK-000.01") == 1
-    assert bump_attempts(layout, "WK-000.01") == 2
-    assert json.loads(layout.attempts.read_text()) == {"WK-000.01": 2}
-    assert load_attempts(layout) == {"WK-000.01": 2}
+    assert bump_attempts(layout, "WK-000.01", "abc123") == 1
+    assert bump_attempts(layout, "WK-000.01", "abc123") == 2
+    assert json.loads(layout.attempts.read_text()) == {"WK-000.01": {"n": 2, "fingerprint": "abc123"}}
+    assert load_attempts(layout) == {"WK-000.01": Attempt(n=2, fingerprint="abc123")}
+
+
+def test_a_bump_records_the_task_as_it_was_when_it_failed(config: BurnConfig) -> None:
+    """The count alone cannot tell a retry of the same task from a retry of a
+    rewritten one, so the definition under test is stored beside it."""
+    layout = config.layout
+    bump_attempts(layout, "WK-000.01", "before")
+    assert bump_attempts(layout, "WK-000.01", "after") == 2
+    assert load_attempts(layout)["WK-000.01"].fingerprint == "after"
+
+
+def test_an_attempts_file_written_before_fingerprints_still_loads(config: BurnConfig) -> None:
+    """Bare ints are what every attempts.json on disk holds today. They read as
+    an unknown definition, which is honest -- we cannot show such a task is
+    unchanged, so it gets one more budget rather than a permanent tombstone.
+    One-time, and the run re-blocks it within that same run if it fails again."""
+    layout = config.layout
+    layout.attempts.parent.mkdir(parents=True, exist_ok=True)
+    layout.attempts.write_text(json.dumps({"WK-000.01": 2}))
+    assert load_attempts(layout) == {"WK-000.01": Attempt(n=2, fingerprint="")}
 
 
 def test_handled_tracks_tasks_this_driver_already_published(config: BurnConfig) -> None:
