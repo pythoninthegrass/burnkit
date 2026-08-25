@@ -85,6 +85,11 @@ def symlink_prepare(repo: Path, rels: tuple[str, ...]) -> Callable[[str, Path], 
     """Build a prepare_worktree that links out-of-tree content into the worktree,
     so a local agent reads it like any other file instead of through env roots.
 
+    A tree that is gitignored-except-for-a-README is the common case, and
+    checking that README out creates the directory -- so the path itself cannot
+    be a link and the content is linked child by child instead. Whatever git put
+    there is the version under test and always wins.
+
     Only appropriate for a backend with no remote planner.
     """
 
@@ -92,9 +97,16 @@ def symlink_prepare(repo: Path, rels: tuple[str, ...]) -> Callable[[str, Path], 
         for rel in rels:
             src = repo / rel
             dst = wt / rel
-            if src.is_dir() and not dst.exists():
+            if not src.is_dir():
+                continue
+            if not dst.exists() and not dst.is_symlink():
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 dst.symlink_to(src, target_is_directory=True)
+            elif dst.is_dir() and not dst.is_symlink():
+                for child in src.iterdir():
+                    target = dst / child.name
+                    if not target.exists() and not target.is_symlink():
+                        target.symlink_to(child, target_is_directory=child.is_dir())
 
     return prepare
 

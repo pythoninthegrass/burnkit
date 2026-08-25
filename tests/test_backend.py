@@ -155,13 +155,53 @@ def test_symlink_prepare_tolerates_a_missing_source(tmp_path: Path) -> None:
     assert not (wt / "data").exists()
 
 
-def test_symlink_prepare_leaves_an_existing_path_alone(tmp_path: Path) -> None:
+def test_symlink_prepare_links_children_when_git_already_made_the_directory(tmp_path: Path) -> None:
+    """The usual shape: the tree is gitignored except for a tracked README that
+    explains how to populate it. Checking that README out creates the directory,
+    so the whole path can no longer be a link -- and a silent no-op leaves the
+    agent facing an empty tree it was promised would be full."""
     repo = tmp_path / "repo"
     (repo / "data").mkdir(parents=True)
+    (repo / "data" / "x.bin").write_bytes(b"\x00")
+    (repo / "data" / "README.md").write_text("download the originals here\n")
     wt = tmp_path / "wt"
     (wt / "data").mkdir(parents=True)
+    (wt / "data" / "README.md").write_text("download the originals here\n")
+
     symlink_prepare(repo, ("data",))("WK-000.01", wt)
-    assert not (wt / "data").is_symlink()
+
+    assert (wt / "data" / "x.bin").read_bytes() == b"\x00"
+
+
+def test_symlink_prepare_never_replaces_what_git_checked_out(tmp_path: Path) -> None:
+    """Whatever is tracked is the version under test; the consumer's working
+    copy of it is not."""
+    repo = tmp_path / "repo"
+    (repo / "data").mkdir(parents=True)
+    (repo / "data" / "README.md").write_text("locally edited\n")
+    wt = tmp_path / "wt"
+    (wt / "data").mkdir(parents=True)
+    (wt / "data" / "README.md").write_text("as committed\n")
+
+    symlink_prepare(repo, ("data",))("WK-000.01", wt)
+
+    assert (wt / "data" / "README.md").read_text() == "as committed\n"
+    assert not (wt / "data" / "README.md").is_symlink()
+
+
+def test_symlink_prepare_is_idempotent(tmp_path: Path) -> None:
+    """`resume` re-prepares a worktree that a killed run already prepared."""
+    repo = tmp_path / "repo"
+    (repo / "data").mkdir(parents=True)
+    (repo / "data" / "x.bin").write_bytes(b"\x00")
+    wt = tmp_path / "wt"
+    wt.mkdir()
+
+    prepare = symlink_prepare(repo, ("data",))
+    prepare("WK-000.01", wt)
+    prepare("WK-000.01", wt)  # must not raise
+
+    assert (wt / "data" / "x.bin").exists()
 
 
 def test_copy_prepare_copies_the_requested_files(tmp_path: Path) -> None:
