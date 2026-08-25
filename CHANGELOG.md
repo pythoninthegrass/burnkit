@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.5.0](https://github.com/pythoninthegrass/burnkit/compare/v0.4.0...v0.5.0) (2026-08-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* `Backend.stall_check` is now `Callable[[str, Path, float], str | None]`, taking the attempt's launch time as a third argument. `cli.stall_watch` passes three arguments unconditionally, so a custom Backend supplying a two-argument `stall_check` raises TypeError on the first poll. Add the parameter; ignore it to keep the old behavior.
+
+### Features
+
+* scope stall detection to the current attempt's session log ([cabcf6a](https://github.com/pythoninthegrass/burnkit/commit/cabcf6afde73e4757794270e87a73ab9408fa95d))
+
 ## [0.4.0](https://github.com/pythoninthegrass/burnkit/compare/v0.3.1...v0.4.0) (2026-08-24)
 
 
