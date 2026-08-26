@@ -24,7 +24,10 @@ def test_no_pkill_anywhere_in_proc() -> None:
     assert "killall" not in PROC_SOURCE
 
 
-def test_kill_task_processes_signals_the_recorded_process_group(config: BurnConfig, monkeypatch) -> None:
+def test_kill_task_processes_sends_sigterm_before_sigkill(config: BurnConfig, monkeypatch) -> None:
+    """A SIGKILL with no warning gives a piped, non-tty backend no chance to
+    flush buffered stdout -- a run that was genuinely working for hours can
+    leave a 0-byte log. SIGTERM first gives it a chance to exit cleanly."""
     layout = config.layout
     layout.ensure_dirs()
     (layout.pids / "WK-000.01").write_text("4242\n")
@@ -33,11 +36,52 @@ def test_kill_task_processes_signals_the_recorded_process_group(config: BurnConf
     monkeypatch.setattr(proc.os, "getpgid", lambda pid: pid + 1)
     monkeypatch.setattr(proc.os, "killpg", lambda pgid, sig: killed.append((pgid, sig)))
     monkeypatch.setattr(proc, "herdr_available", lambda: False)
+    monkeypatch.setattr(proc.time, "sleep", lambda s: None)
 
     proc.kill_task_processes(layout, "WK-000.01")
 
-    assert killed == [(4243, signal.SIGKILL)]
+    # SIGTERM, then a liveness probe (signal 0), then SIGKILL since the fake
+    # killpg never raises ProcessLookupError to signal the group has exited.
+    assert killed == [(4243, signal.SIGTERM), (4243, 0), (4243, signal.SIGKILL)]
     assert not (layout.pids / "WK-000.01").exists()
+
+
+def test_kill_task_processes_skips_sigkill_once_sigterm_worked(config: BurnConfig, monkeypatch) -> None:
+    layout = config.layout
+    layout.ensure_dirs()
+    (layout.pids / "WK-000.01").write_text("4242\n")
+
+    killed: list[tuple[int, int]] = []
+
+    def fake_killpg(pgid: int, sig: int) -> None:
+        killed.append((pgid, sig))
+        if sig == 0:
+            raise ProcessLookupError  # the group exited during the grace period
+
+    monkeypatch.setattr(proc.os, "getpgid", lambda pid: pid + 1)
+    monkeypatch.setattr(proc.os, "killpg", fake_killpg)
+    monkeypatch.setattr(proc, "herdr_available", lambda: False)
+    monkeypatch.setattr(proc.time, "sleep", lambda s: None)
+
+    proc.kill_task_processes(layout, "WK-000.01")
+
+    assert killed == [(4243, signal.SIGTERM), (4243, 0)]
+
+
+def test_kill_task_processes_waits_the_grace_period_between_signals(config: BurnConfig, monkeypatch) -> None:
+    layout = config.layout
+    layout.ensure_dirs()
+    (layout.pids / "WK-000.01").write_text("4242\n")
+
+    slept: list[float] = []
+    monkeypatch.setattr(proc.os, "getpgid", lambda pid: pid + 1)
+    monkeypatch.setattr(proc.os, "killpg", lambda pgid, sig: None)
+    monkeypatch.setattr(proc, "herdr_available", lambda: False)
+    monkeypatch.setattr(proc.time, "sleep", lambda s: slept.append(s))
+
+    proc.kill_task_processes(layout, "WK-000.01")
+
+    assert slept == [proc.KILL_GRACE_S]
 
 
 def test_kill_task_processes_tolerates_a_dead_pid(config: BurnConfig, monkeypatch) -> None:
@@ -73,10 +117,11 @@ def test_kill_all_only_touches_pids_this_driver_recorded(config: BurnConfig, mon
     monkeypatch.setattr(proc.os, "getpgid", lambda pid: pid)
     monkeypatch.setattr(proc.os, "killpg", lambda pgid, sig: killed.append(pgid))
     monkeypatch.setattr(proc, "herdr_available", lambda: False)
+    monkeypatch.setattr(proc.time, "sleep", lambda s: None)
 
     proc.kill_all(layout)
 
-    assert sorted(killed) == [11, 22]
+    assert sorted(set(killed)) == [11, 22]
 
 
 def test_wait_for_exit_returns_on_the_exit_marker(tmp_path: Path) -> None:

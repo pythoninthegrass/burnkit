@@ -23,6 +23,12 @@ from decouple import Config, RepositoryEnv
 from pathlib import Path
 
 EXIT_MARKER = "=== AGENT_EXIT:"
+# A piped, non-tty backend (dsh) has been observed to buffer stdout and only
+# flush it on a clean exit -- a SIGKILL with no warning can throw away hours
+# of real work, leaving a 0-byte log with no DONE/BAIL marker even though the
+# agent's own session transcript shows it was still working. SIGTERM first
+# gives it a chance to flush and exit on its own.
+KILL_GRACE_S = 5.0
 # Only the tail of a log is scanned for the marker: an agent that quotes the
 # marker back mid-run has not exited, and the launch wrapper always appends the
 # real one last.
@@ -91,10 +97,15 @@ def launch(task: str, wt: Path, shell_cmd: str, task_env: dict, env: dict, forwa
     subprocess.Popen(["bash", "-c", shell_cmd], cwd=wt, env={**env, **task_env}, start_new_session=True)
 
 
-def _kill_recorded_pid(path: Path) -> None:
+def _kill_recorded_pid(path: Path, *, grace_s: float = KILL_GRACE_S) -> None:
     with contextlib.suppress(ProcessLookupError, ValueError, PermissionError, OSError):
         pid = int(path.read_text().strip())
-        os.killpg(os.getpgid(pid), signal.SIGKILL)
+        pgid = os.getpgid(pid)
+        os.killpg(pgid, signal.SIGTERM)
+        time.sleep(grace_s)
+        with contextlib.suppress(ProcessLookupError, ValueError, PermissionError, OSError):
+            os.killpg(pgid, 0)  # still alive after the grace period -- finish it off
+            os.killpg(pgid, signal.SIGKILL)
 
 
 def kill_task_processes(layout: BurnLayout, task: str) -> None:
