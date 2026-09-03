@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.7.0](https://github.com/pythoninthegrass/burnkit/compare/v0.6.1...v0.7.0) (2026-09-03)
+
+
+### ⚠ BREAKING CHANGES
+
+* **queue:** load_attempts returns dict[str, Attempt] rather than dict[str, int], and bump_attempts takes the task fingerprint. Attempt counts already on disk are bare ints and still load, as an unknown definition.
+
+### Features
+
+* **queue:** let a revised task out of triage, and never queue an archived one ([0ee4a9f](https://github.com/pythoninthegrass/burnkit/commit/0ee4a9f723548fb302c112ad8179aff21ce74f19))
+
+
+### Bug Fixes
+
+* **proc:** ignore an exit marker left by an earlier attempt at the same log path ([a9c4c2b](https://github.com/pythoninthegrass/burnkit/commit/a9c4c2bdd8c0b61969edb3c4c7ea6e64d3393941)), closes [#8](https://github.com/pythoninthegrass/burnkit/issues/8)
+* **proc:** send SIGTERM before SIGKILL when killing a task's process group ([3c746e4](https://github.com/pythoninthegrass/burnkit/commit/3c746e42a58b3380acc7dbdd313b7f95a0502983))
+
 ## [0.6.1](https://github.com/pythoninthegrass/burnkit/compare/v0.6.0...v0.6.1) (2026-08-25)
 
 
