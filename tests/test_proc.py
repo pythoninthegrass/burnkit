@@ -155,6 +155,49 @@ def test_wait_for_exit_only_scans_the_tail(tmp_path: Path) -> None:
     assert not finished
 
 
+def test_log_signature_is_none_for_a_log_that_does_not_exist(tmp_path: Path) -> None:
+    assert proc.log_signature(tmp_path / "run.log") is None
+
+
+def test_log_signature_changes_when_a_log_is_truncated_in_place(tmp_path: Path) -> None:
+    """The backends pipe through `tee`, which truncates without replacing the
+    file, so an inode alone cannot tell a rewritten log from an untouched one."""
+    log = tmp_path / "run.log"
+    log.write_text("previous attempt\n")
+    before = proc.log_signature(log)
+
+    with log.open("w"):
+        pass
+
+    assert log.stat().st_ino == before[1]
+    assert proc.log_signature(log) != before
+
+
+def test_wait_for_exit_ignores_a_marker_left_at_the_same_path_by_an_earlier_attempt(tmp_path: Path) -> None:
+    """Resetting the attempt counter makes the derived log path collide with an
+    earlier attempt's log, which already carries a marker. Launching is
+    asynchronous, so without a pre-launch baseline the very first poll reads
+    that marker and the iteration ends before the agent has booted."""
+    log = tmp_path / "run.log"
+    log.write_text(f"earlier attempt\n{proc.EXIT_MARKER}0 ===\n")
+    baseline = proc.log_signature(log)
+
+    finished, _ = proc.wait_for_exit(log, kill_file=tmp_path / "KILL", timeout_s=0, poll_s=1, baseline=baseline)
+
+    assert finished is False
+
+
+def test_wait_for_exit_accepts_the_marker_once_the_log_has_been_rewritten(tmp_path: Path) -> None:
+    log = tmp_path / "run.log"
+    log.write_text(f"earlier attempt\n{proc.EXIT_MARKER}0 ===\n")
+    baseline = proc.log_signature(log)
+    log.write_text(f"this attempt did real work\n{proc.EXIT_MARKER}0 ===\n")
+
+    finished, _ = proc.wait_for_exit(log, kill_file=tmp_path / "KILL", timeout_s=1, poll_s=1, baseline=baseline)
+
+    assert finished is True
+
+
 def test_sh_captures_output_as_text() -> None:
     cp = proc.sh("printf", "hello")
     assert cp.stdout == "hello"

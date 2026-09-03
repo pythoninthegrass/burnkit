@@ -34,6 +34,9 @@ KILL_GRACE_S = 5.0
 # real one last.
 _LOG_TAIL_BYTES = 2000
 
+# (device, inode, size, mtime_ns) -- see log_signature.
+LogSignature = tuple[int, int, int, int]
+
 
 def sh(
     *args: str, cwd: Path | None = None, check: bool = True, timeout: int = 300, env: dict | None = None
@@ -129,6 +132,22 @@ def kill_all(layout: BurnLayout) -> None:
         subprocess.run(["herdr", "pane", "close", "driver"], check=False, capture_output=True, timeout=15)
 
 
+def log_signature(log: Path) -> LogSignature | None:
+    """Identity of an attempt log, or None if there is nothing at that path.
+
+    Captured before an agent is launched and handed back to `wait_for_exit` as
+    its `baseline`, so a marker written by an earlier attempt at the same path
+    cannot be read as this attempt's. Size and mtime are part of the identity
+    because the backends pipe through `tee`, which truncates the file in place
+    and so keeps its inode.
+    """
+    try:
+        st = log.stat()
+    except FileNotFoundError:
+        return None
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+
+
 def wait_for_exit(
     log: Path,
     *,
@@ -136,6 +155,7 @@ def wait_for_exit(
     timeout_s: int,
     poll_s: int,
     stall_check: Callable[[], bool] | None = None,
+    baseline: LogSignature | None = None,
 ) -> tuple[bool, float]:
     """Block until the launch wrapper appends its exit marker, the kill sentinel
     appears, `stall_check` reports no progress, or the timeout expires. Returns
@@ -144,12 +164,17 @@ def wait_for_exit(
     `stall_check` is optional because not every backend leaves a transcript to
     judge progress from. It is checked after the exit marker, so a run that
     looped and then finished still counts as finished.
+
+    `baseline` is `log_signature(log)` from before the launch. While the log
+    still matches it, its contents predate this attempt and any marker in them
+    is ignored. The default of None is what `log_signature` returns for a path
+    that did not exist, in which case nothing can predate the attempt.
     """
     start = time.monotonic()
     while True:
         if kill_file.exists():
             return False, time.monotonic() - start
-        if log.exists() and EXIT_MARKER in log.read_text(errors="replace")[-_LOG_TAIL_BYTES:]:
+        if log.exists() and log_signature(log) != baseline and EXIT_MARKER in log.read_text(errors="replace")[-_LOG_TAIL_BYTES:]:
             return True, time.monotonic() - start
         if stall_check is not None and stall_check():
             return False, time.monotonic() - start

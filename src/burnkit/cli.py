@@ -15,7 +15,7 @@ from burnkit.backend import Backend, dsh_backend, hermes_backend, preflight_hook
 from burnkit.config import BurnConfig, base_ref
 from burnkit.gates import verify
 from burnkit.integration import default_integration, retire_branch
-from burnkit.proc import git, kill_all, kill_task_processes, launch, launch_env, wait_for_exit
+from burnkit.proc import git, kill_all, kill_task_processes, launch, launch_env, log_signature, wait_for_exit
 from burnkit.queue import branch_name, fingerprint, has_budget, is_phase_parent, load_tasks, next_ready, task_md
 from burnkit.state import Attempt, bump_attempts, load_attempts, mark_handled, now, read_fallback_planner, record_fallback_planner
 from collections.abc import Callable
@@ -192,6 +192,10 @@ def cmd_run(
             return EXIT_PREFLIGHT_HOOK
 
         layout.write_heartbeat(task, attempt, "start", f"backend={backend.name} branch={branch}")
+        # Captured before the launch, because `launch` returns as soon as the
+        # agent is spawned: anything already at this path is an earlier
+        # attempt's, and `wait_for_exit` must not read its marker as this one's.
+        log_baseline = log_signature(log)
         launch_time = time.time()
         launch(
             task,
@@ -208,6 +212,7 @@ def cmd_run(
             timeout_s=config.task_timeout_s,
             poll_s=config.poll_s,
             stall_check=stall_check,
+            baseline=log_baseline,
         )
         if not finished:
             # Recorded before the kill so a triaging human sees why the attempt
